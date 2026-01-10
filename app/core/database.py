@@ -20,7 +20,7 @@ engine = create_engine(
     connect_args={"check_same_thread": False} if "sqlite" in settings.DATABASE_URL else {}
 )
 
-
+print(settings.DATABASE_URL)
 def create_db_and_tables():
     """
     Create all database tables based on SQLModel models.

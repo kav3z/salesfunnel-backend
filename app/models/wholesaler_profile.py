@@ -1,52 +1,51 @@
-from typing import Optional, TYPE_CHECKING
-from sqlmodel import SQLModel, Field, Relationship
-from decimal import Decimal
-import uuid
+# internal imports
+from app.models.user import User
 
-if TYPE_CHECKING:
-    from .user import User
+# external imports
+from sqlmodel import SQLModel, Field, Relationship
+from typing import Optional
+from uuid import uuid4, UUID
+from datetime import datetime
 
 
 class WholesalerProfile(SQLModel, table=True):
     __tablename__ = "wholesaler_profiles" # type: ignore
     
-    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    user_id: uuid.UUID = Field(
-        foreign_key="users.id",
-        nullable=False,
-        unique=True,
-        index=True
-    )
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_id: UUID = Field(foreign_key="users.id", unique=True, index=True)
     
-    # Business information
-    business_name: str = Field(nullable=False)
-    business_address: str = Field(nullable=False)
-    business_registration_number: Optional[str] = Field(default=None)
-    tax_id: Optional[str] = Field(default=None)
+    # Company Information
+    business_name: str = Field(..., max_length=255)
+    cac_registration_number: str = Field(..., max_length=50)
+    business_address: str = Field(..., max_length=500)
+    business_phone: str = Field(..., max_length=20)
+    business_email: str = Field(..., max_length=255)
     
-    # Credit information
-    credit_limit: Optional[Decimal] = Field(
-        default=None,
-        decimal_places=2,
-        max_digits=10
-    )
-    credit_used: Decimal = Field(
-        default=0,
-        decimal_places=2,
-        max_digits=10
-    )
-    credit_status: Optional[str] = Field(default="good")
+    # Tax & Compliance
+    tin: str = Field(..., max_length=50)
     
-    # Order statistics
-    total_orders_placed: int = Field(default=0)
-    total_amount_spent: Decimal = Field(
-        default=0,
-        decimal_places=2,
-        max_digits=12
-    )
+    # Owner/Director Details
+    owner_full_name: str = Field(..., max_length=255)
+    owner_phone: str = Field(..., max_length=20)
+    owner_email: str = Field(..., max_length=255)
     
-    # Status
+    # Bank Details
+    bank_name: str = Field(..., max_length=100)
+    account_name: str = Field(..., max_length=255)
+    account_number: str = Field(..., max_length=20)
+    
+    # Verification Documents (file paths/URLs)
+    cac_certificate_url: Optional[str] = Field(default=None, max_length=500)
+    tin_certificate_url: Optional[str] = Field(default=None, max_length=500)
+    utility_bill_url: Optional[str] = Field(default=None, max_length=500)
+    
+    # Verification status
     is_verified: bool = Field(default=False)
+    verified_at: Optional[datetime] = Field(default=None)
     
-    # Relationships
+    # Timestamps
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    
+    # Relationship
     user: "User" = Relationship(back_populates="wholesaler_profile")

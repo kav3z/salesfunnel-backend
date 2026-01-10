@@ -1,48 +1,50 @@
+from sqlmodel import SQLModel, Field, Relationship
 from typing import Optional, TYPE_CHECKING
-from sqlmodel import SQLModel, Field, Relationship, Column, JSON
-from decimal import Decimal
-import uuid
+from uuid import uuid4, UUID
+from datetime import datetime
 
 if TYPE_CHECKING:
-    from .user import User
+    from app.models.user import User
 
 
 class DistributorProfile(SQLModel, table=True):
-    __tablename__ = "distributor_profiles" # type: ignore
+    __tablename__ = "distributor_profiles" #type: ignore
     
-    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    user_id: uuid.UUID = Field(
-        foreign_key="users.id",
-        nullable=False,
-        unique=True,
-        index=True
-    )
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_id: UUID = Field(foreign_key="users.id", unique=True, index=True)
     
-    # Business information
-    company_name: str = Field(nullable=False)
-    business_address: str = Field(nullable=False)
-    business_registration_number: Optional[str] = Field(default=None)
+    # Company Information
+    business_name: str = Field(..., max_length=255)
+    cac_registration_number: str = Field(..., max_length=50, unique=True)
+    business_address: str = Field(..., max_length=500)
+    business_phone: str = Field(..., max_length=20)
+    business_email: str = Field(..., max_length=255)
     
-    # Bank account details
-    bank_name: Optional[str] = Field(default=None)
-    account_number: Optional[str] = Field(default=None)
-    account_name: Optional[str] = Field(default=None)
+    # Tax & Compliance
+    tin: str = Field(..., max_length=50, unique=True)
     
-    # Operating details
-    operating_hours: Optional[dict] = Field(default=None, sa_column=Column(JSON))
-    delivery_zones: Optional[list] = Field(default=None, sa_column=Column(JSON))
+    # Owner/Director Details
+    owner_full_name: str = Field(..., max_length=255)
+    owner_phone: str = Field(..., max_length=20)
+    owner_email: str = Field(..., max_length=255)
     
-    # Performance metrics
-    avg_fulfillment_time_minutes: Optional[int] = Field(default=None)
-    total_orders_fulfilled: int = Field(default=0)
-    rating: Optional[Decimal] = Field(
-        default=None,
-        decimal_places=2,
-        max_digits=3
-    )
+    # Bank Details (for payment settlement)
+    bank_name: str = Field(..., max_length=100)
+    account_name: str = Field(..., max_length=255)
+    account_number: str = Field(..., max_length=20)
     
-    # Status
+    # Verification Documents (file paths/URLs)
+    cac_certificate_url: Optional[str] = Field(default=None, max_length=500)
+    tin_certificate_url: Optional[str] = Field(default=None, max_length=500)
+    utility_bill_url: Optional[str] = Field(default=None, max_length=500)
+    
+    # Verification status
     is_verified: bool = Field(default=False)
+    verified_at: Optional[datetime] = Field(default=None)
     
-    # Relationships
-    user: "User" = Relationship(back_populates="distributor_profile")
+    # Timestamps
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    
+    # Relationship
+    user: Optional["User"] = Relationship(back_populates="distributor_profile")
