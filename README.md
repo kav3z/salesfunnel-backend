@@ -9,10 +9,10 @@ PUT /users/profile: To update a user's profile information.
 
 2. Product & Catalog Management:
 GET /products: To retrieve a list of all products (for "All Products / Distributor Selection").
+POST /distributors/{id}/products: (Distributor/Admin) To add new products to a distributor's catalog.
 GET /distributors/{id}/products: To retrieve a list of products for a specific distributor (for "Distributor Product Catalog").
 GET /products/{id}: To retrieve details of a single product (for "Wholesaler Product Detail Page").
 GET /distributors: To retrieve a list of all distributors, including popular ones.
-POST /distributors/{id}/products: (Distributor/Admin) To add new products to a distributor's catalog.
 PUT /distributors/{id}/products/{product_id}: (Distributor/Admin) To update product details.
 DELETE /distributors/{id}/products/{product_id}: (Distributor/Admin) To remove a product.
 

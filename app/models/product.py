@@ -7,6 +7,7 @@ import uuid
 if TYPE_CHECKING:
     from .user import User
     from .order_item import OrderItem
+    from .cart import CartItem
 
 
 class Product(SQLModel, table=True):
@@ -32,3 +33,4 @@ class Product(SQLModel, table=True):
     # Relationships
     distributor: "User" = Relationship(back_populates="products")
     order_items: list["OrderItem"] = Relationship(back_populates="product")
+    cart_items: list["CartItem"] = Relationship(back_populates="product")

@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from .payment import Payment
     from .wholesaler_profile import WholesalerProfile
     from .distributor_profile import DistributorProfile
+    from .cart import Cart
 
 
 class UserRole(str, Enum):
@@ -48,3 +49,6 @@ class User(SQLModel, table=True):
     # Profile relationships
     wholesaler_profile: Optional["WholesalerProfile"] = Relationship(back_populates="user")
     distributor_profile: Optional["DistributorProfile"] = Relationship(back_populates="user")
+    
+    # Cart relationship (for wholesalers)
+    cart: Optional["Cart"] = Relationship(back_populates="wholesaler")

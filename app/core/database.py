@@ -5,6 +5,7 @@ from .config import settings
 # Import ALL models before creating tables
 from app.models.user import User
 from app.models.order import Order
+from app.models.cart import Cart, CartItem
 from app.models.audit_log import AuditLog
 from app.models.distributor_profile import DistributorProfile
 from app.models.notification import Notification

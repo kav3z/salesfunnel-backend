@@ -51,7 +51,6 @@ async def save_upload_file(upload_file: UploadFile, user_id: str, file_type: str
     return file_path
 
 
-
 @v1_auth.post("/token", response_model=Token)
 async def login_for_access_token(
     db: db_dependency,
@@ -87,7 +86,11 @@ async def login_for_access_token(
         expires_delta=timedelta(minutes=30)
     )
     
-    return Token(access_token=token, token_type="bearer")
+    return Token(
+        user_id=str(user.id),
+        access_token=token,
+        token_type="bearer",
+    )
 
 
 @v1_auth.patch("/update-password", status_code=status.HTTP_200_OK)

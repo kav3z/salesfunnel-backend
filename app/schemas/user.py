@@ -7,9 +7,11 @@ from typing import Optional
 from datetime import datetime
 
 class Token(BaseModel):
-    """Token response schema"""
+    """Token response schema with user info"""
     access_token: str
     token_type: str
+    user_id: str
+
 
 
 class LoginRequest(BaseModel):
