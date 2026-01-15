@@ -29,10 +29,11 @@ POST /orders/{id}/proof-of-payment: To upload proof of payment for an order (fal
 4. Order Management (Distributor Side):
 GET /distributor/orders/new: To retrieve new incoming orders for a distributor.
 GET /distributor/orders/{id}: To retrieve details of a specific order for a distributor.
+PUT /distributor/orders/{id}/status: To update the order status (e.g., "Packaging Confirmation").
 POST /distributor/orders/{id}/payment/verify: To verify payment for an order.
 PUT /distributor/orders/{id}/payment/approve: To approve payment for an order.
 PUT /distributor/orders/{id}/payment/reject: To reject payment for an order.
-PUT /distributor/orders/{id}/status: To update the order status (e.g., "Packaging Confirmation").
+
 
 5. Payment & Transaction Management:
 POST /payments/bank-transfer: To log a bank transfer payment initiation (though actual transfer happens externally).

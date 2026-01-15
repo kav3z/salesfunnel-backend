@@ -5,6 +5,9 @@ from app.models.product import Product
 from app.models.user import User, UserRole
 from app.models.distributor_profile import DistributorProfile
 from app.core.dependencies import get_current_user, DBSession, require_role
+from app.models.order import Order, OrderStatus
+from app.models.order_item import OrderItem
+from app.schemas.order import OrderResponse, OrderDetailResponse, OrderListResponse, OrderStatusUpdate, OrderItemResponse
 
 # External imports
 from typing import Annotated, Optional, List
@@ -12,7 +15,7 @@ from uuid import UUID
 from math import ceil
 from datetime import datetime
 from fastapi import APIRouter, Depends, status, HTTPException, Query
-from sqlmodel import select, func
+from sqlmodel import select, func, or_, desc
 
 
 v1_distributor = APIRouter(prefix="/v1", tags=['v1_distributor'])
@@ -491,4 +494,245 @@ async def delete_distributor_product(
     db.commit()
     
     return None
+
+
+@v1_distributor.get(
+    "/distributor/orders/new",
+    response_model=OrderListResponse,
+    status_code=status.HTTP_200_OK
+)
+async def get_new_distributor_orders(
+    db: db_dependency,
+    current_user: User = Depends(get_current_user),
+    page: int = Query(default=1, ge=1, description="Page number"),
+    page_size: int = Query(default=10, ge=1, le=100, description="Items per page")
+):
+    """
+    Retrieve new incoming orders for a distributor.
+    
+    Returns orders with "pending" or "paid" status for the authenticated distributor.
+    
+    Args:
+        page: Page number for pagination
+        page_size: Number of items per page
+    
+    Returns:
+        OrderListResponse: Paginated list of new orders
+        
+    Raises:
+        HTTPException 403: If user is not a distributor
+    """
+    # Ensure user is a distributor
+    if current_user.role != UserRole.DISTRIBUTOR:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only distributors can access this endpoint"
+        )
+    
+    # Build query for new orders (pending or paid status)
+    query = select(Order).where(
+        Order.distributor_id == current_user.id,
+        or_(Order.status == OrderStatus.PENDING, Order.status == OrderStatus.PAID)
+    )
+    count_query = select(func.count()).select_from(Order).where(
+        Order.distributor_id == current_user.id,
+        or_(Order.status == OrderStatus.PENDING, Order.status == OrderStatus.PAID)
+    )
+    
+    # Get total count
+    total = db.exec(count_query).one()
+    
+    # Calculate pagination
+    total_pages = ceil(total / page_size) if total > 0 else 1
+    offset = (page - 1) * page_size
+    
+    # Apply pagination and ordering (newest first)
+    query = query.order_by(desc(Order.created_at)).offset(offset).limit(page_size)
+    
+    # Execute query
+    orders = db.exec(query).all()
+    
+    return OrderListResponse(
+        orders=[OrderResponse.model_validate(order) for order in orders],
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages
+    )
+
+
+@v1_distributor.get(
+    "/distributor/orders/{order_id}",
+    response_model=OrderDetailResponse,
+    status_code=status.HTTP_200_OK
+)
+async def get_distributor_order_details(
+    order_id: UUID,
+    db: db_dependency,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Retrieve details of a specific order for a distributor.
+    
+    Returns complete order details including order items.
+    
+    Args:
+        order_id: UUID of the order
+    
+    Returns:
+        OrderDetailResponse: Detailed order information with items
+        
+    Raises:
+        HTTPException 403: If user is not a distributor or not authorized
+        HTTPException 404: If order not found
+    """
+    # Ensure user is a distributor
+    if current_user.role != UserRole.DISTRIBUTOR:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only distributors can access this endpoint"
+        )
+    
+    # Find the order
+    order = db.exec(
+        select(Order).where(
+            Order.id == order_id,
+            Order.distributor_id == current_user.id
+        )
+    ).first()
+    
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order not found or you don't have access to this order"
+        )
+    
+    # Get order items with product details
+    order_items = db.exec(
+        select(OrderItem).where(OrderItem.order_id == order_id)
+    ).all()
+
+    # Get all product IDs from order items
+    product_ids = [item.product_id for item in order_items]
+
+    # Fetch all products in one query for efficiency
+    products = db.exec(
+        select(Product).where(Product.id.in_(product_ids))  # type: ignore
+    ).all()
+
+    # Create a product lookup dictionary
+    product_lookup = {product.id: product for product in products}
+
+    # Get distributor name
+    distributor_profile = db.exec(
+        select(DistributorProfile).where(DistributorProfile.id == current_user.id)
+    ).first()
+    
+    # Build response with actual product data
+    order_response = OrderResponse.model_validate(order)
+
+    items_response = [
+        OrderItemResponse(
+            id=item.id,
+            product_id=item.product_id,
+            product_name=product_lookup[item.product_id].name,
+            product_sku=product_lookup[item.product_id].sku,
+            quantity=item.quantity,
+            unit_price=item.unit_price,
+            subtotal=item.subtotal
+        )
+        for item in order_items
+    ]
+    
+    return OrderDetailResponse(
+        **order_response.model_dump(),
+        items=items_response,
+        distributor_name=distributor_profile.business_name if distributor_profile else None
+    )
+
+
+@v1_distributor.put(
+    "/distributor/orders/{order_id}/status",
+    response_model=OrderResponse,
+    status_code=status.HTTP_200_OK
+)
+async def update_distributor_order_status(
+    order_id: UUID,
+    status_update: OrderStatusUpdate,
+    db: db_dependency,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Update the order status (e.g., "Packaging Confirmation").
+    
+    Distributors can update order status to track order progress.
+    
+    Args:
+        order_id: UUID of the order
+        status_update: New status information
+    
+    Returns:
+        OrderResponse: Updated order information
+        
+    Raises:
+        HTTPException 403: If user is not a distributor or not authorized
+        HTTPException 404: If order not found
+        HTTPException 400: If status transition is invalid
+    """
+    # Ensure user is a distributor
+    if current_user.role != UserRole.DISTRIBUTOR:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only distributors can access this endpoint"
+        )
+    
+    # Find the order
+    order = db.exec(
+        select(Order).where(
+            Order.id == order_id,
+            Order.distributor_id == current_user.id
+        )
+    ).first()
+    
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order not found or you don't have access to this order"
+        )
+    
+    # Validate status transition
+    valid_transitions = {
+        OrderStatus.PENDING: [OrderStatus.PAID, OrderStatus.CANCELLED],
+        OrderStatus.PAID: [OrderStatus.APPROVED, OrderStatus.CANCELLED],
+        OrderStatus.APPROVED: [OrderStatus.READY_FOR_PICKUP, OrderStatus.CANCELLED],
+        OrderStatus.READY_FOR_PICKUP: [OrderStatus.COMPLETED],
+        OrderStatus.COMPLETED: [],
+        OrderStatus.CANCELLED: []
+    }
+    
+    if status_update.status not in valid_transitions.get(order.status, []):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid status transition from {order.status} to {status_update.status}"
+        )
+    
+    # Update order status
+    order.status = status_update.status
+    
+    # Update relevant timestamp
+    now = datetime.utcnow()
+    if status_update.status == OrderStatus.APPROVED:
+        order.approved_at = now
+    elif status_update.status == OrderStatus.READY_FOR_PICKUP:
+        order.ready_at = now
+    elif status_update.status == OrderStatus.COMPLETED:
+        order.completed_at = now
+    elif status_update.status == OrderStatus.CANCELLED:
+        order.cancelled_at = now
+    
+    db.add(order)
+    db.commit()
+    db.refresh(order)
+    
+    return OrderResponse.model_validate(order)
 
