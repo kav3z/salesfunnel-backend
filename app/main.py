@@ -7,6 +7,7 @@ from .core.database import init_db
 
 # external imports
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware  # <-- Import this
 
 init_db()
 
@@ -14,6 +15,15 @@ app = FastAPI(
     title="SalesFunnel", 
     description="A platform that connects distributors with wholesalers"
     )
+
+# Add CORS Middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
 
 app.include_router(v1_auth)
 app.include_router(v1_admin)
