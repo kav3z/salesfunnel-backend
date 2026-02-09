@@ -5,9 +5,6 @@ from app.schemas.distributor import DistributorResponse
 from app.models.user import User, UserRole
 from app.models.wholesaler_profile import WholesalerProfile
 from app.models.distributor_profile import DistributorProfile
-from app.schemas.user import *
-from app.schemas.wholesaler import WholesalerResponse
-from app.schemas.distributor import DistributorResponse
 from app.core.dependencies import get_current_user, DBSession
 from app.core.security import create_access_token, authenticate_user, hash_password, verify_password
 
@@ -152,18 +149,11 @@ async def register_wholesaler(
 ):
     """
     Register a new wholesaler with complete business information and documents.
-    
-    Required Documents:
-    - CAC Certificate
-    - TIN Certificate  
-    - Utility Bill (Proof of Address)
     """
     
-    # Check if user already exists (by business email or owner email)
+    # Check if user already exists (by business email only)
     existing_user = db.exec(
-        select(User).where(
-            (User.email == business_email) | (User.email == owner_email)
-        )
+        select(User).where(User.email == business_email)
     ).first()
     
     if existing_user:
@@ -215,12 +205,12 @@ async def register_wholesaler(
                 detail=f"{name} must be PDF, JPG, JPEG, or PNG"
             )
     
-    # Create User account
+    # Create User account using Business details
     new_user = User(
-        email=owner_email,
+        email=business_email,
         password_hash=hash_password(password),
-        full_name=owner_full_name,
-        phone=owner_phone,
+        full_name=business_name,
+        phone=business_phone,
         role=UserRole.WHOLESALER,
         is_active=True
     )
@@ -241,7 +231,6 @@ async def register_wholesaler(
             utility_bill, str(new_user.id), "utility_bill", WHOLESALER_UPLOAD_DIR
         )
     except Exception as e:
-        # Rollback user creation if file upload fails
         db.delete(new_user)
         db.commit()
         raise HTTPException(
@@ -273,9 +262,6 @@ async def register_wholesaler(
     db.add(wholesaler_profile)
     db.commit()
     db.refresh(wholesaler_profile)
-    
-    # TODO: Add background task to send verification email
-    # background_tasks.add_task(send_verification_email, owner_email, business_name)
     
     return WholesalerResponse(
         id=str(wholesaler_profile.id),
@@ -324,18 +310,11 @@ async def register_distributor(
 ):
     """
     Register a new distributor with complete business information and documents.
-    
-    Required Documents:
-    - CAC Certificate
-    - TIN Certificate  
-    - Utility Bill (Proof of Address)
     """
     
-    # Check if user already exists (by business email or owner email)
+    # Check if user already exists
     existing_user = db.exec(
-        select(User).where(
-            (User.email == business_email) | (User.email == owner_email)
-        )
+        select(User).where(User.email == business_email)
     ).first()
     
     if existing_user:
@@ -344,7 +323,7 @@ async def register_distributor(
             detail="Email already registered"
         )
     
-    # Check if CAC number already exists in distributor profiles
+    # Check if CAC number already exists
     existing_cac = db.exec(
         select(DistributorProfile).where(
             DistributorProfile.cac_registration_number == cac_registration_number
@@ -357,7 +336,7 @@ async def register_distributor(
             detail="CAC Registration Number already registered"
         )
     
-    # Check if TIN already exists in distributor profiles
+    # Check if TIN already exists
     existing_tin = db.exec(
         select(DistributorProfile).where(DistributorProfile.tin == tin)
     ).first()
@@ -380,7 +359,6 @@ async def register_distributor(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"{name} filename is missing"
             )
-        
         file_ext = file.filename.split(".")[-1].lower()
         if file_ext not in allowed_extensions:
             raise HTTPException(
@@ -388,12 +366,12 @@ async def register_distributor(
                 detail=f"{name} must be PDF, JPG, JPEG, or PNG"
             )
     
-    # Create User account
+    # Create User account using Business details
     new_user = User(
-        email=owner_email,
+        email=business_email,
         password_hash=hash_password(password),
-        full_name=owner_full_name,
-        phone=owner_phone,
+        full_name=business_name,
+        phone=business_phone,
         role=UserRole.DISTRIBUTOR,
         is_active=True
     )
@@ -414,7 +392,6 @@ async def register_distributor(
             utility_bill, str(new_user.id), "utility_bill", DISTRIBUTOR_UPLOAD_DIR
         )
     except Exception as e:
-        # Rollback user creation if file upload fails
         db.delete(new_user)
         db.commit()
         raise HTTPException(
@@ -446,9 +423,6 @@ async def register_distributor(
     db.add(distributor_profile)
     db.commit()
     db.refresh(distributor_profile)
-    
-    # TODO: Add background task to send verification email
-    # background_tasks.add_task(send_verification_email, owner_email, business_name)
     
     return DistributorResponse(
         id=str(distributor_profile.id),
