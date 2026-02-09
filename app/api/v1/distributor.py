@@ -4,7 +4,7 @@ from app.schemas.distributor import DistributorListResponse
 from app.models.product import Product
 from app.models.user import User, UserRole
 from app.models.distributor_profile import DistributorProfile
-from app.core.dependencies import get_current_user, DBSession, require_role
+from app.core.dependencies import get_current_user, DBSession, require_role, CurrentUser, DistributorUser
 from app.models.order import Order, OrderStatus
 from app.models.order_item import OrderItem
 from app.schemas.order import OrderResponse, OrderDetailResponse, OrderListResponse, OrderStatusUpdate, OrderItemResponse
@@ -96,13 +96,14 @@ async def get_all_products(
 @v1_distributor.post(
     "/distributors/{distributor_id}/products", 
     response_model=ProductResponse, 
-    status_code=status.HTTP_201_CREATED
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_role([UserRole.DISTRIBUTOR, UserRole.ADMIN]))]
 )
 async def add_product_to_distributor_catalog(
     distributor_id: UUID,
     product_data: ProductCreate,
     db: db_dependency,
-    current_user: User = Depends(get_current_user)
+    current_user: CurrentUser
 ):
     """
     Add a new product to a distributor's catalog.
@@ -121,19 +122,11 @@ async def add_product_to_distributor_catalog(
         HTTPException 404: If distributor not found
         HTTPException 409: If SKU already exists
     """
-    # Check authorization
-    if current_user.role == UserRole.DISTRIBUTOR:
-        # Distributors can only add products to their own catalog
-        if current_user.id != distributor_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You can only add products to your own catalog"
-            )
-    elif current_user.role != UserRole.ADMIN:
-        # Only distributors and admins can add products
+    # Additional check for Distributor trying to add to another's catalog
+    if current_user.role == UserRole.DISTRIBUTOR and current_user.id != distributor_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only distributors and admins can add products"
+            detail="You can only add products to your own catalog"
         )
     
     # Verify distributor exists and has the correct role
@@ -350,14 +343,15 @@ async def get_all_distributors(
 @v1_distributor.put(
     "/distributors/{distributor_id}/products/{product_id}",
     response_model=ProductResponse,
-    status_code=status.HTTP_200_OK
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_role([UserRole.DISTRIBUTOR, UserRole.ADMIN]))]
 )
 async def update_distributor_product(
     distributor_id: UUID,
     product_id: UUID,
     product_data: ProductUpdate,
     db: db_dependency,
-    current_user: User = Depends(get_current_user)
+    current_user: CurrentUser
 ):
     """
     Update product details for a distributor's catalog.
@@ -376,17 +370,11 @@ async def update_distributor_product(
         HTTPException 403: If user is not authorized to update products
         HTTPException 404: If distributor or product not found
     """
-    # Check authorization
-    if current_user.role == UserRole.DISTRIBUTOR:
-        if current_user.id != distributor_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You can only update products in your own catalog"
-            )
-    elif current_user.role != UserRole.ADMIN:
+    # Additional check for Distributor trying to update another's catalog
+    if current_user.role == UserRole.DISTRIBUTOR and current_user.id != distributor_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only distributors and admins can update products"
+            detail="You can only update products in your own catalog"
         )
     
     # Verify distributor exists
@@ -431,13 +419,14 @@ async def update_distributor_product(
 
 @v1_distributor.delete(
     "/distributors/{distributor_id}/products/{product_id}",
-    status_code=status.HTTP_204_NO_CONTENT
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_role([UserRole.DISTRIBUTOR, UserRole.ADMIN]))]
 )
 async def delete_distributor_product(
     distributor_id: UUID,
     product_id: UUID,
     db: db_dependency,
-    current_user: User = Depends(get_current_user)
+    current_user: CurrentUser
 ):
     """
     Remove a product from a distributor's catalog.
@@ -452,17 +441,11 @@ async def delete_distributor_product(
         HTTPException 403: If user is not authorized to delete products
         HTTPException 404: If distributor or product not found
     """
-    # Check authorization
-    if current_user.role == UserRole.DISTRIBUTOR:
-        if current_user.id != distributor_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You can only delete products from your own catalog"
-            )
-    elif current_user.role != UserRole.ADMIN:
+    # Additional check for Distributor trying to delete from another's catalog
+    if current_user.role == UserRole.DISTRIBUTOR and current_user.id != distributor_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only distributors and admins can delete products"
+            detail="You can only delete products from your own catalog"
         )
     
     # Verify distributor exists
@@ -499,11 +482,14 @@ async def delete_distributor_product(
 @v1_distributor.get(
     "/distributor/orders/new",
     response_model=OrderListResponse,
-    status_code=status.HTTP_200_OK
+    status_code=status.HTTP_200_OK,
+    # Here we can just use DistributorUser as the type for current_user if it was defined as a param
+    # But since current_user is passed as param, we can use dependency in path
+    dependencies=[Depends(require_role([UserRole.DISTRIBUTOR]))]
 )
 async def get_new_distributor_orders(
     db: db_dependency,
-    current_user: User = Depends(get_current_user),
+    current_user: CurrentUser, # Already validated as Distributor by path dependency
     page: int = Query(default=1, ge=1, description="Page number"),
     page_size: int = Query(default=10, ge=1, le=100, description="Items per page")
 ):
@@ -522,12 +508,7 @@ async def get_new_distributor_orders(
     Raises:
         HTTPException 403: If user is not a distributor
     """
-    # Ensure user is a distributor
-    if current_user.role != UserRole.DISTRIBUTOR:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only distributors can access this endpoint"
-        )
+    # Role check removed as it is handled by require_role dependency
     
     # Build query for new orders (pending or paid status)
     query = select(Order).where(
@@ -564,12 +545,13 @@ async def get_new_distributor_orders(
 @v1_distributor.get(
     "/distributor/orders/{order_id}",
     response_model=OrderDetailResponse,
-    status_code=status.HTTP_200_OK
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_role([UserRole.DISTRIBUTOR]))]
 )
 async def get_distributor_order_details(
     order_id: UUID,
     db: db_dependency,
-    current_user: User = Depends(get_current_user)
+    current_user: CurrentUser
 ):
     """
     Retrieve details of a specific order for a distributor.
@@ -586,12 +568,7 @@ async def get_distributor_order_details(
         HTTPException 403: If user is not a distributor or not authorized
         HTTPException 404: If order not found
     """
-    # Ensure user is a distributor
-    if current_user.role != UserRole.DISTRIBUTOR:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only distributors can access this endpoint"
-        )
+    # Role check removed as it is handled by require_role dependency
     
     # Find the order
     order = db.exec(
@@ -654,13 +631,14 @@ async def get_distributor_order_details(
 @v1_distributor.put(
     "/distributor/orders/{order_id}/status",
     response_model=OrderResponse,
-    status_code=status.HTTP_200_OK
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_role([UserRole.DISTRIBUTOR]))]
 )
 async def update_distributor_order_status(
     order_id: UUID,
     status_update: OrderStatusUpdate,
     db: db_dependency,
-    current_user: User = Depends(get_current_user)
+    current_user: CurrentUser
 ):
     """
     Update the order status (e.g., "Packaging Confirmation").
@@ -679,12 +657,7 @@ async def update_distributor_order_status(
         HTTPException 404: If order not found
         HTTPException 400: If status transition is invalid
     """
-    # Ensure user is a distributor
-    if current_user.role != UserRole.DISTRIBUTOR:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only distributors can access this endpoint"
-        )
+    # Role check removed as it is handled by require_role dependency
     
     # Find the order
     order = db.exec(

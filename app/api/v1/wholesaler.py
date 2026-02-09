@@ -6,7 +6,7 @@ from app.models.product import Product
 from app.models.order import Order, OrderStatus
 from app.models.order_item import OrderItem
 from app.models.user import User, UserRole
-from app.core.dependencies import get_current_user, DBSession
+from app.core.dependencies import get_current_user, DBSession, require_role, CurrentUser
 
 # External imports
 from typing import List, Optional
@@ -14,10 +14,10 @@ from uuid import UUID
 from decimal import Decimal
 from datetime import datetime
 from math import ceil
-import random
-import string
 from fastapi import APIRouter, Depends, status, HTTPException, Query
 from sqlmodel import select, func
+import random
+import string
 
 
 v1_wholesaler = APIRouter(prefix="/v1/wholesaler", tags=['v1_wholesaler'])
@@ -86,35 +86,30 @@ def build_cart_response(cart: Cart, db: DBSession) -> CartResponse:
     )
 
 
-@v1_wholesaler.post("/cart/add", response_model=CartResponse, status_code=status.HTTP_201_CREATED)
+def clear_cart(db: db_dependency, cart: Cart) -> None:
+    """Clear all items from a cart after order is placed"""
+    for item in cart.items:
+        db.delete(item)
+    cart.updated_at = datetime.utcnow()
+    db.add(cart)
+
+
+# endpoints 
+@v1_wholesaler.post(
+    "/cart/add",
+    response_model=CartResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_role([UserRole.WHOLESALER]))]
+)
 async def add_to_cart(
     item_data: CartItemAdd,
     db: db_dependency,
-    current_user: User = Depends(get_current_user)
+    current_user: CurrentUser
 ):
     """
     Add a product to the wholesaler's cart.
-    
-    If the product already exists in the cart, the quantity will be increased.
-    
-    Args:
-        item_data: Product ID and quantity to add
-    
-    Returns:
-        CartResponse: Updated cart contents
-        
-    Raises:
-        HTTPException 403: If user is not a wholesaler
-        HTTPException 404: If product not found
-        HTTPException 400: If product is not available or insufficient stock
+    Accessible only by Wholesalers.
     """
-    # Only wholesalers can add to cart
-    if current_user.role != UserRole.WHOLESALER:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only wholesalers can add items to cart"
-        )
-    
     # Verify product exists and is available
     product = db.exec(
         select(Product).where(Product.id == item_data.product_id)
@@ -177,33 +172,21 @@ async def add_to_cart(
     return build_cart_response(cart, db)
 
 
-@v1_wholesaler.put("/cart/update", response_model=CartResponse, status_code=status.HTTP_200_OK)
+@v1_wholesaler.put(
+    "/cart/update",
+    response_model=CartResponse,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_role([UserRole.WHOLESALER]))]
+)
 async def update_cart_item(
     item_data: CartItemUpdate,
     db: db_dependency,
-    current_user: User = Depends(get_current_user)
+    current_user: CurrentUser
 ):
     """
     Update product quantity in the wholesaler's cart.
-    
-    Args:
-        item_data: Product ID and new quantity
-    
-    Returns:
-        CartResponse: Updated cart contents
-        
-    Raises:
-        HTTPException 403: If user is not a wholesaler
-        HTTPException 404: If cart or product not found in cart
-        HTTPException 400: If insufficient stock
+    Accessible only by Wholesalers.
     """
-    # Only wholesalers can update cart
-    if current_user.role != UserRole.WHOLESALER:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only wholesalers can update cart"
-        )
-    
     # Get cart
     cart = db.exec(
         select(Cart).where(Cart.wholesaler_id == current_user.id)
@@ -253,32 +236,21 @@ async def update_cart_item(
     return build_cart_response(cart, db)
 
 
-@v1_wholesaler.delete("/cart/remove", response_model=CartResponse, status_code=status.HTTP_200_OK)
+@v1_wholesaler.delete(
+    "/cart/remove",
+    response_model=CartResponse,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_role([UserRole.WHOLESALER]))]
+)
 async def remove_from_cart(
     item_data: CartItemRemove,
     db: db_dependency,
-    current_user: User = Depends(get_current_user)
+    current_user: CurrentUser
 ):
     """
     Remove a product from the wholesaler's cart.
-    
-    Args:
-        item_data: Product ID to remove
-    
-    Returns:
-        CartResponse: Updated cart contents
-        
-    Raises:
-        HTTPException 403: If user is not a wholesaler
-        HTTPException 404: If cart or product not found in cart
+    Accessible only by Wholesalers.
     """
-    # Only wholesalers can remove from cart
-    if current_user.role != UserRole.WHOLESALER:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only wholesalers can remove items from cart"
-        )
-    
     # Get cart
     cart = db.exec(
         select(Cart).where(Cart.wholesaler_id == current_user.id)
@@ -316,69 +288,41 @@ async def remove_from_cart(
     return build_cart_response(cart, db)
 
 
-@v1_wholesaler.get("/cart", response_model=CartResponse, status_code=status.HTTP_200_OK)
+@v1_wholesaler.get(
+    "/cart",
+    response_model=CartResponse,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_role([UserRole.WHOLESALER]))]
+)
 async def get_cart(
     db: db_dependency,
-    current_user: User = Depends(get_current_user)
+    current_user: CurrentUser
 ):
     """
     Retrieve the current contents of the wholesaler's cart.
-    
-    Returns:
-        CartResponse: Current cart contents with all items and totals
-        
-    Raises:
-        HTTPException 403: If user is not a wholesaler
+    Accessible only by Wholesalers.
     """
-    # Only wholesalers can view cart
-    if current_user.role != UserRole.WHOLESALER:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only wholesalers can view cart"
-        )
-    
     # Get or create cart
     cart = get_or_create_cart(db, current_user.id)
     
     return build_cart_response(cart, db)
 
 
-def clear_cart(db: db_dependency, cart: Cart) -> None:
-    """Clear all items from a cart after order is placed"""
-    for item in cart.items:
-        db.delete(item)
-    cart.updated_at = datetime.utcnow()
-    db.add(cart)
-
-
-@v1_wholesaler.post("/orders", response_model=OrderDetailResponse, status_code=status.HTTP_201_CREATED)
+@v1_wholesaler.post(
+    "/orders",
+    response_model=OrderDetailResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_role([UserRole.WHOLESALER]))]
+)
 async def create_order(
     order_data: OrderCreate,
     db: db_dependency,
-    current_user: User = Depends(get_current_user)
+    current_user: CurrentUser
 ):
     """
     Create a new order from the wholesaler's cart.
-    
-    Creates separate orders for each distributor if cart contains products from multiple distributors.
-    
-    Args:
-        order_data: Optional order notes
-    
-    Returns:
-        OrderDetailResponse: Created order details (returns first order if multiple created)
-        
-    Raises:
-        HTTPException 403: If user is not a wholesaler
-        HTTPException 400: If cart is empty or products unavailable
+    Accessible only by Wholesalers.
     """
-    # Only wholesalers can create orders
-    if current_user.role != UserRole.WHOLESALER:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only wholesalers can create orders"
-        )
-    
     # Get cart
     cart = db.exec(
         select(Cart).where(Cart.wholesaler_id == current_user.id)
@@ -522,35 +466,23 @@ async def create_order(
     )
 
 
-@v1_wholesaler.get("/orders", response_model=OrderListResponse, status_code=status.HTTP_200_OK)
+@v1_wholesaler.get(
+    "/orders",
+    response_model=OrderListResponse,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_role([UserRole.WHOLESALER]))]
+)
 async def get_wholesaler_orders(
     db: db_dependency,
-    current_user: User = Depends(get_current_user),
+    current_user: CurrentUser,
     page: int = Query(default=1, ge=1, description="Page number"),
     page_size: int = Query(default=10, ge=1, le=100, description="Items per page"),
     status_filter: Optional[OrderStatus] = Query(default=None, description="Filter by order status")
 ):
     """
     Retrieve a list of all orders placed by the wholesaler.
-    
-    Args:
-        page: Page number for pagination
-        page_size: Number of items per page
-        status_filter: Optional filter by order status
-    
-    Returns:
-        OrderListResponse: Paginated list of orders
-        
-    Raises:
-        HTTPException 403: If user is not a wholesaler
+    Accessible only by Wholesalers.
     """
-    # Only wholesalers can view their orders
-    if current_user.role != UserRole.WHOLESALER:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only wholesalers can view their orders"
-        )
-    
     # Build query
     query = select(Order).where(Order.wholesaler_id == current_user.id)
     count_query = select(func.count()).select_from(Order).where(Order.wholesaler_id == current_user.id)
@@ -582,32 +514,21 @@ async def get_wholesaler_orders(
     )
 
 
-@v1_wholesaler.get("/orders/{order_id}", response_model=OrderDetailResponse, status_code=status.HTTP_200_OK)
+@v1_wholesaler.get(
+    "/orders/{order_id}",
+    response_model=OrderDetailResponse,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_role([UserRole.WHOLESALER]))]
+)
 async def get_wholesaler_order_details(
     order_id: UUID,
     db: db_dependency,
-    current_user: User = Depends(get_current_user)
+    current_user: CurrentUser
 ):
     """
     Retrieve details of a specific wholesaler order.
-    
-    Args:
-        order_id: UUID of the order
-    
-    Returns:
-        OrderDetailResponse: Detailed order information with items
-        
-    Raises:
-        HTTPException 403: If user is not a wholesaler or doesn't own the order
-        HTTPException 404: If order not found
+    Accessible only by Wholesalers (own orders).
     """
-    # Only wholesalers can view their order details
-    if current_user.role != UserRole.WHOLESALER:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only wholesalers can view their order details"
-        )
-    
     # Find the order
     order = db.exec(
         select(Order).where(Order.id == order_id)

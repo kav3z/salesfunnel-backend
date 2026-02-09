@@ -46,6 +46,7 @@ logs/
 
 # Uploads
 uploads/
+scripts/
 temp/
 
 # Testing

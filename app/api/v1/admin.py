@@ -489,3 +489,163 @@ async def unblock_user(
         business_name=business_name,
         is_verified=is_verified
     )
+
+
+@v1_admin.put("/users/{user_id}/verify", response_model=AdminUserResponse, status_code=status.HTTP_200_OK)
+async def verify_user(
+    user_id: UUID,
+    db: db_dependency,
+    current_user: User = Depends(require_admin)
+):
+    """
+    Verify a user's business profile (Wholesaler or Distributor).
+    
+    Admin only endpoint. Sets is_verified to True on the profile.
+    """
+    # Find the user
+    user = db.exec(
+        select(User).where(User.id == user_id)
+    ).first()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Check role and get profile
+    profile = None
+    business_name = None
+    
+    if user.role == UserRole.WHOLESALER:
+        profile = db.exec(
+            select(WholesalerProfile).where(WholesalerProfile.user_id == user.id)
+        ).first()
+        if not profile:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Wholesaler profile not found"
+            )
+    elif user.role == UserRole.DISTRIBUTOR:
+        profile = db.exec(
+            select(DistributorProfile).where(DistributorProfile.user_id == user.id)
+        ).first()
+        if not profile:
+             raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Distributor profile not found"
+            )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot verify this user role"
+        )
+        
+    # Check if already verified
+    if profile.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User is already verified"
+        )
+    
+    # Verify the profile
+    profile.is_verified = True
+    profile.updated_at = datetime.utcnow()
+    
+    db.add(profile)
+    db.commit()
+    db.refresh(profile)
+    business_name = profile.business_name
+    
+    return AdminUserResponse(
+        id=str(user.id),
+        email=user.email,
+        full_name=user.full_name,
+        phone=user.phone,
+        role=user.role,
+        is_active=user.is_active,
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+        business_name=business_name,
+        is_verified=True
+    )
+
+
+@v1_admin.put("/users/{user_id}/unverify", response_model=AdminUserResponse, status_code=status.HTTP_200_OK)
+async def unverify_user(
+    user_id: UUID,
+    db: db_dependency,
+    current_user: User = Depends(require_admin)
+):
+    """
+    Unverify a user's business profile (Wholesaler or Distributor).
+    
+    Admin only endpoint. Sets is_verified to False on the profile.
+    """
+    # Find the user
+    user = db.exec(
+        select(User).where(User.id == user_id)
+    ).first()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Check role and get profile
+    profile = None
+    business_name = None
+    
+    if user.role == UserRole.WHOLESALER:
+        profile = db.exec(
+            select(WholesalerProfile).where(WholesalerProfile.user_id == user.id)
+        ).first()
+        if not profile:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Wholesaler profile not found"
+            )
+    elif user.role == UserRole.DISTRIBUTOR:
+        profile = db.exec(
+            select(DistributorProfile).where(DistributorProfile.user_id == user.id)
+        ).first()
+        if not profile:
+             raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Distributor profile not found"
+            )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot unverify this user role"
+        )
+        
+    # Check if currently unverified
+    if not profile.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User is not currently verified"
+        )
+    
+    # Unverify the profile
+    profile.is_verified = False
+    profile.updated_at = datetime.utcnow()
+    
+    db.add(profile)
+    db.commit()
+    db.refresh(profile)
+    business_name = profile.business_name
+    
+    return AdminUserResponse(
+        id=str(user.id),
+        email=user.email,
+        full_name=user.full_name,
+        phone=user.phone,
+        role=user.role,
+        is_active=user.is_active,
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+        business_name=business_name,
+        is_verified=False
+    )
