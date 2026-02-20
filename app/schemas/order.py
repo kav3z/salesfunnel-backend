@@ -49,6 +49,7 @@ class OrderDetailResponse(OrderResponse):
     """Schema for detailed order response with items"""
     items: List[OrderItemResponse]
     distributor_name: Optional[str] = None
+    wholesaler_name: Optional[str] = None
     
     class Config: # type: ignore
         from_attributes = True

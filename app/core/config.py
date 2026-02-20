@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     # Security & Authentication
     SECRET_KEY: str = "your-secret-key-here-change-in-production"
     JWT_ALGORITHM: str = "HS256"
-    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 900
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     
     # CORS Settings

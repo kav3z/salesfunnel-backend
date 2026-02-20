@@ -569,6 +569,11 @@ async def get_wholesaler_order_details(
         select(User).where(User.id == order.distributor_id)
     ).first()
     
+    # Get wholesaler name
+    wholesaler = db.exec(
+        select(User).where(User.id == current_user.id)
+    ).first()
+
     return OrderDetailResponse(
         id=order.id,
         order_number=order.order_number,
@@ -584,5 +589,6 @@ async def get_wholesaler_order_details(
         completed_at=order.completed_at,
         cancelled_at=order.cancelled_at,
         items=items_response,
-        distributor_name=distributor.full_name if distributor else None
+        distributor_name=distributor.full_name if distributor else None,
+        wholesaler_name=wholesaler.full_name if wholesaler else None
     )

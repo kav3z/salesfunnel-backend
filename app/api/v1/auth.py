@@ -3,6 +3,7 @@ from app.schemas.user import *
 from app.schemas.wholesaler import WholesalerResponse
 from app.schemas.distributor import DistributorResponse
 from app.models.user import User, UserRole
+from app.core.config import settings
 from app.models.wholesaler_profile import WholesalerProfile
 from app.models.distributor_profile import DistributorProfile
 from app.core.dependencies import get_current_user, DBSession
@@ -73,20 +74,21 @@ async def login_for_access_token(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account is inactive"
         )
-    
+    print(settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_access_token(
         email=user.email,
         user_id=str(user.id),
         user_role=user.role.value,
         is_active=user.is_active,
         full_name=user.full_name,
-        expires_delta=timedelta(minutes=30)
+        expires_delta=timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
     )
     
     return Token(
         user_id=str(user.id),
         access_token=token,
         token_type="bearer",
+        role=user.role
     )
 
 

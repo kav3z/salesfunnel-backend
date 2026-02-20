@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     from .user import User
     from .order_item import OrderItem
     from .cart import CartItem
+    from .category import Category
 
 
 class Product(SQLModel, table=True):
@@ -24,11 +25,20 @@ class Product(SQLModel, table=True):
     )
     stock_quantity: int = Field(default=0, nullable=False)
     distributor_id: uuid.UUID = Field(foreign_key="users.id", nullable=False, index=True)
+    
+    # Existing string field (consider removing later if replacing with relation)
     category: Optional[str] = Field(default=None)
+    category_id: Optional[uuid.UUID] = Field(default=None, foreign_key="categories.id")
+    
+
     image_url: Optional[str] = Field(default=None)
     is_available: bool = Field(default=True)
+    is_deleted: bool = Field(default=False)  # Added field
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+    
+    # Many-to-one relationship with category
+    category_rel: Optional["Category"] = Relationship(back_populates="products")
     
     # Relationships
     distributor: "User" = Relationship(back_populates="products")

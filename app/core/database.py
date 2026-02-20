@@ -13,6 +13,7 @@ from app.models.order_item import OrderItem
 from app.models.payment import Payment
 from app.models.product import Product
 from app.models.wholesaler_profile import WholesalerProfile
+from app.models.category import Category
 
 # Create database engine
 engine = create_engine(

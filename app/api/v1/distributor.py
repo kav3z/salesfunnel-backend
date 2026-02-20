@@ -2,6 +2,7 @@
 from app.schemas.product import ProductCreate, ProductUpdate, ProductResponse, ProductListResponse
 from app.schemas.distributor import DistributorListResponse
 from app.models.product import Product
+from app.models.category import Category
 from app.models.user import User, UserRole
 from app.models.distributor_profile import DistributorProfile
 from app.core.dependencies import get_current_user, DBSession, require_role, CurrentUser, DistributorUser
@@ -12,9 +13,13 @@ from app.schemas.order import OrderResponse, OrderDetailResponse, OrderListRespo
 # External imports
 from typing import Annotated, Optional, List
 from uuid import UUID
+import uuid
 from math import ceil
+from decimal import Decimal
+import shutil
+import os
 from datetime import datetime
-from fastapi import APIRouter, Depends, status, HTTPException, Query
+from fastapi import APIRouter, Depends, status, HTTPException, Query, File, UploadFile, Form
 from sqlmodel import select, func, or_, desc
 
 
@@ -23,7 +28,11 @@ v1_distributor = APIRouter(prefix="/v1", tags=['v1_distributor'])
 db_dependency = DBSession
 
 
-@v1_distributor.get("/products", response_model=ProductListResponse, status_code=status.HTTP_200_OK)
+@v1_distributor.get(
+        "/products", 
+        response_model=ProductListResponse, 
+        status_code=status.HTTP_200_OK
+        )
 async def get_all_products(
     db: db_dependency,
     page: int = Query(default=1, ge=1, description="Page number"),
@@ -100,28 +109,24 @@ async def get_all_products(
     dependencies=[Depends(require_role([UserRole.DISTRIBUTOR, UserRole.ADMIN]))]
 )
 async def add_product_to_distributor_catalog(
-    distributor_id: UUID,
-    product_data: ProductCreate,
     db: db_dependency,
-    current_user: CurrentUser
+    current_user: CurrentUser,
+    sku: str = Form(...),
+    name: str = Form(...),
+    description: Optional[str] = Form(None),
+    price_per_case: Decimal = Form(...),
+    stock_quantity: int = Form(...),
+    category: str = Form(...),
+    is_available: bool = Form(True),
+    image: Optional[UploadFile] = File(None)
 ):
     """
-    Add a new product to a distributor's catalog.
+    Add a new product to a distributor's catalog with optional image upload.
     
-    This endpoint is restricted to Distributors (for their own catalog) and Admins.
-    
-    Args:
-        distributor_id: UUID of the distributor
-        product_data: Product creation data
-    
-    Returns:
-        ProductResponse: The created product
-        
-    Raises:
-        HTTPException 403: If user is not authorized to add products
-        HTTPException 404: If distributor not found
-        HTTPException 409: If SKU already exists
+    This endpoint accepts Form data instead of JSON to support file uploads.
     """
+
+    distributor_id = current_user.id
     # Additional check for Distributor trying to add to another's catalog
     if current_user.role == UserRole.DISTRIBUTOR and current_user.id != distributor_id:
         raise HTTPException(
@@ -140,28 +145,66 @@ async def add_product_to_distributor_catalog(
             detail="Distributor not found"
         )
     
+    # checks if product is in an available category
+    existing_category = db.exec(
+        select(Category).where(Category.name == category)
+    ).first()
+    
+    if not existing_category:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Product with wrong category '{category}'"
+        )
+    
     # Check if SKU already exists
     existing_product = db.exec(
-        select(Product).where(Product.sku == product_data.sku)
+        select(Product).where(Product.sku == sku)
     ).first()
     
     if existing_product:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Product with SKU '{product_data.sku}' already exists"
+            detail=f"Product with SKU '{sku}' already exists"
         )
+
+    # Handle Image Upload
+    image_url_path = None
+    if image:
+        try:
+            # Ensure static directory exists
+            upload_dir = "uploads/product_images"
+            os.makedirs(upload_dir, exist_ok=True)
+            
+            # Generate unique filename
+            # Use 'or ""' to ensure it's a string, even if filename is None (satisfies type checker)
+            file_extension = os.path.splitext(image.filename or "")[1]
+            unique_filename = f"{uuid.uuid4()}{file_extension}"
+            file_path = f"{upload_dir}/{unique_filename}"
+            
+            # Save file
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(image.file, buffer)
+            
+            # Set image URL (relative path or absolute URL based on your serving setup)
+            image_url_path = f"/static/product_images/{unique_filename}"
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+                detail=f"Could not upload image: {str(e)}"
+            )
     
     # Create new product
     new_product = Product(
-        sku=product_data.sku,
-        name=product_data.name,
-        description=product_data.description,
-        price_per_case=product_data.price_per_case,
-        stock_quantity=product_data.stock_quantity,
+        sku=sku,
+        name=name,
+        description=description,
+        price_per_case=price_per_case,
+        stock_quantity=stock_quantity,
         distributor_id=distributor_id,
-        category=product_data.category,
-        image_url=product_data.image_url,
-        is_available=product_data.is_available
+        category=category,
+        category_id=existing_category.id, # Link to category object as well
+        image_url=image_url_path,
+        is_available=is_available
     )
     
     db.add(new_product)
@@ -347,7 +390,6 @@ async def get_all_distributors(
     dependencies=[Depends(require_role([UserRole.DISTRIBUTOR, UserRole.ADMIN]))]
 )
 async def update_distributor_product(
-    distributor_id: UUID,
     product_id: UUID,
     product_data: ProductUpdate,
     db: db_dependency,
@@ -370,6 +412,7 @@ async def update_distributor_product(
         HTTPException 403: If user is not authorized to update products
         HTTPException 404: If distributor or product not found
     """
+    distributor_id = current_user.id
     # Additional check for Distributor trying to update another's catalog
     if current_user.role == UserRole.DISTRIBUTOR and current_user.id != distributor_id:
         raise HTTPException(
@@ -423,7 +466,6 @@ async def update_distributor_product(
     dependencies=[Depends(require_role([UserRole.DISTRIBUTOR, UserRole.ADMIN]))]
 )
 async def delete_distributor_product(
-    distributor_id: UUID,
     product_id: UUID,
     db: db_dependency,
     current_user: CurrentUser
@@ -441,6 +483,7 @@ async def delete_distributor_product(
         HTTPException 403: If user is not authorized to delete products
         HTTPException 404: If distributor or product not found
     """
+    distributor_id = current_user.id
     # Additional check for Distributor trying to delete from another's catalog
     if current_user.role == UserRole.DISTRIBUTOR and current_user.id != distributor_id:
         raise HTTPException(
@@ -472,12 +515,26 @@ async def delete_distributor_product(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Product not found in this distributor's catalog"
         )
-    
-    db.delete(product)
+
+    print("Reaching this line")
+    # Check for associated order items
+    # We query the OrderItem table directly to see if this product has ever been ordered
+    has_orders = db.exec(select(OrderItem).where(OrderItem.product_id == product_id)).first()
+    print(has_orders)
+
+    if has_orders:
+        print("can soft delete")
+        # Soft delete: Product has history, so just mark it as deleted
+        product.is_deleted = True
+        # Optionally, you might want to mark it unavailable too so it doesn't appear in sales
+        product.is_available = False 
+        db.add(product)
+    else:
+        # Hard delete: Product has no history, safe to remove completely
+        db.delete(product)
+        
     db.commit()
     
-    return None
-
 
 @v1_distributor.get(
     "/distributor/orders/new",
@@ -602,11 +659,17 @@ async def get_distributor_order_details(
 
     # Get distributor name
     distributor_profile = db.exec(
-        select(DistributorProfile).where(DistributorProfile.id == current_user.id)
+        select(User).where(User.id == current_user.id)
     ).first()
+    print(distributor_profile)
     
     # Build response with actual product data
     order_response = OrderResponse.model_validate(order)
+
+      # Get wholesaler name
+    wholesaler_profile = db.exec(
+        select(User).where(User.id == order_response.wholesaler_id)
+    ).first()
 
     items_response = [
         OrderItemResponse(
@@ -624,7 +687,8 @@ async def get_distributor_order_details(
     return OrderDetailResponse(
         **order_response.model_dump(),
         items=items_response,
-        distributor_name=distributor_profile.business_name if distributor_profile else None
+        distributor_name=distributor_profile.full_name if distributor_profile else None,
+        wholesaler_name=wholesaler_profile.full_name if wholesaler_profile else None
     )
 
 
