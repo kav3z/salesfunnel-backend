@@ -373,6 +373,7 @@ async def get_all_distributors(
     return [
         DistributorListResponse(
             id=str(d.id),
+            user_id=str(d.user_id),
             business_name=d.business_name,
             business_address=d.business_address,
             business_phone=d.business_phone,

@@ -54,6 +54,7 @@ class DistributorResponse(BaseModel):
 class DistributorListResponse(BaseModel):
     """Distributor List Item Response"""
     id: str
+    user_id: str
     business_name: str
     business_address: str
     business_phone: str
