@@ -63,7 +63,7 @@ def build_cart_response(cart: Cart, db: DBSession) -> CartResponse:
             total_amount += subtotal
             
             items_response.append(CartItemResponse(
-                id=item.id,
+                cart_item_id=item.id,
                 product_id=item.product_id,
                 product_name=product.name,
                 product_sku=product.sku,
@@ -397,7 +397,11 @@ async def create_order(
             distributor_id=distributor_id,
             total_amount=total_amount,
             status=OrderStatus.PENDING,
-            notes=order_data.notes
+            notes=order_data.notes,
+            delivery_address=order_data.delivery_address,
+            is_delivery=order_data.is_delivery,
+            contact_name=order_data.contact_name,
+            contact_phone_no=order_data.contact_phone_no
         )
         db.add(order)
         db.commit()
@@ -422,49 +426,8 @@ async def create_order(
     clear_cart(db, cart)
     db.commit()
     
-    # Return the first order (or you could return all orders)
-    first_order = created_orders[0]
+    return "order has been created"
     
-    # Build response with items
-    items_response = []
-    for order_item in first_order.order_items:
-        product = db.exec(
-            select(Product).where(Product.id == order_item.product_id)
-        ).first()
-        
-        items_response.append(OrderItemResponse(
-            id=order_item.id,
-            product_id=order_item.product_id,
-            product_name=product.name if product else "Unknown",
-            product_sku=product.sku if product else "N/A",
-            quantity=order_item.quantity,
-            unit_price=order_item.unit_price,
-            subtotal=order_item.subtotal
-        ))
-    
-    # Get distributor name
-    distributor = db.exec(
-        select(User).where(User.id == first_order.distributor_id)
-    ).first()
-    
-    return OrderDetailResponse(
-        id=first_order.id,
-        order_number=first_order.order_number,
-        wholesaler_id=first_order.wholesaler_id,
-        distributor_id=first_order.distributor_id,
-        total_amount=first_order.total_amount,
-        status=first_order.status,
-        notes=first_order.notes,
-        created_at=first_order.created_at,
-        paid_at=first_order.paid_at,
-        approved_at=first_order.approved_at,
-        ready_at=first_order.ready_at,
-        completed_at=first_order.completed_at,
-        cancelled_at=first_order.cancelled_at,
-        items=items_response,
-        distributor_name=distributor.full_name if distributor else None
-    )
-
 
 @v1_wholesaler.get(
     "/orders",
@@ -563,16 +526,6 @@ async def get_wholesaler_order_details(
             unit_price=order_item.unit_price,
             subtotal=order_item.subtotal
         ))
-    
-    # Get distributor name
-    distributor = db.exec(
-        select(User).where(User.id == order.distributor_id)
-    ).first()
-    
-    # Get wholesaler name
-    wholesaler = db.exec(
-        select(User).where(User.id == current_user.id)
-    ).first()
 
     return OrderDetailResponse(
         id=order.id,
@@ -589,6 +542,5 @@ async def get_wholesaler_order_details(
         completed_at=order.completed_at,
         cancelled_at=order.cancelled_at,
         items=items_response,
-        distributor_name=distributor.full_name if distributor else None,
-        wholesaler_name=wholesaler.full_name if wholesaler else None
+        wholesaler_name=current_user.full_name
     )

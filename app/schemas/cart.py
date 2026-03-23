@@ -24,7 +24,7 @@ class CartItemRemove(BaseModel):
 
 class CartItemResponse(BaseModel):
     """Schema for cart item response"""
-    id: UUID
+    cart_item_id: UUID
     product_id: UUID
     product_name: str
     product_sku: str

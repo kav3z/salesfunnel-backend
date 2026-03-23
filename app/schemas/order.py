@@ -9,6 +9,10 @@ from app.models.order import OrderStatus
 class OrderCreate(BaseModel):
     """Schema for creating an order from cart"""
     notes: Optional[str] = Field(None, max_length=500, description="Optional order notes")
+    delivery_address: str
+    is_delivery: bool
+    contact_name: str
+    contact_phone_no: str
 
 
 class OrderItemResponse(BaseModel):
@@ -30,6 +34,7 @@ class OrderResponse(BaseModel):
     id: UUID
     order_number: str
     wholesaler_id: UUID
+    wholesaler_name: str
     distributor_id: UUID
     total_amount: Decimal
     status: OrderStatus
@@ -48,8 +53,6 @@ class OrderResponse(BaseModel):
 class OrderDetailResponse(OrderResponse):
     """Schema for detailed order response with items"""
     items: List[OrderItemResponse]
-    distributor_name: Optional[str] = None
-    wholesaler_name: Optional[str] = None
     
     class Config: # type: ignore
         from_attributes = True

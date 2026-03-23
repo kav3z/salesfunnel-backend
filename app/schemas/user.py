@@ -117,7 +117,5 @@ class DistributorProfileUpdate(BaseModel):
 
 class UserProfileUpdate(BaseModel):
     """User profile update request"""
-    full_name: Optional[str] = Field(None, min_length=2, max_length=255)
-    phone: Optional[str] = Field(None, min_length=10, max_length=20)
     wholesaler_profile: Optional[WholesalerProfileUpdate] = None
     distributor_profile: Optional[DistributorProfileUpdate] = None

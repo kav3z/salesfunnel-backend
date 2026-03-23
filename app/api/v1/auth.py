@@ -556,15 +556,6 @@ async def update_user_profile(
             detail="User not found"
         )
     
-    # Update basic user info
-    if profile_update.full_name is not None:
-        user.full_name = profile_update.full_name
-    if profile_update.phone is not None:
-        user.phone = profile_update.phone
-    
-    user.updated_at = datetime.utcnow()
-    db.add(user)
-    
     # Update wholesaler profile if applicable
     if user.role == UserRole.WHOLESALER and profile_update.wholesaler_profile is not None:
         wholesaler_profile = db.exec(

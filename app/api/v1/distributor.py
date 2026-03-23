@@ -541,13 +541,11 @@ async def delete_distributor_product(
     "/distributor/orders/new",
     response_model=OrderListResponse,
     status_code=status.HTTP_200_OK,
-    # Here we can just use DistributorUser as the type for current_user if it was defined as a param
-    # But since current_user is passed as param, we can use dependency in path
     dependencies=[Depends(require_role([UserRole.DISTRIBUTOR]))]
 )
 async def get_new_distributor_orders(
     db: db_dependency,
-    current_user: CurrentUser, # Already validated as Distributor by path dependency
+    current_user: CurrentUser,
     page: int = Query(default=1, ge=1, description="Page number"),
     page_size: int = Query(default=10, ge=1, le=100, description="Items per page")
 ):
@@ -591,8 +589,20 @@ async def get_new_distributor_orders(
     # Execute query
     orders = db.exec(query).all()
     
+    # Fetch wholesaler names for each order
+    order_responses = []
+    for order in orders:
+        wholesaler = db.exec(
+            select(User).where(User.id == order.wholesaler_id)
+        ).first()
+        order_data = {
+            **order.__dict__,
+            'wholesaler_name': wholesaler.full_name if wholesaler else None
+        }
+        order_responses.append(OrderResponse(**order_data))
+    
     return OrderListResponse(
-        orders=[OrderResponse.model_validate(order) for order in orders],
+        orders=order_responses,
         total=total,
         page=page,
         page_size=page_size,
@@ -658,19 +668,18 @@ async def get_distributor_order_details(
     # Create a product lookup dictionary
     product_lookup = {product.id: product for product in products}
 
-    # Get distributor name
-    distributor_profile = db.exec(
-        select(User).where(User.id == current_user.id)
-    ).first()
-    print(distributor_profile)
     
-    # Build response with actual product data
-    order_response = OrderResponse.model_validate(order)
-
-      # Get wholesaler name
+    # Get wholesaler name
     wholesaler_profile = db.exec(
-        select(User).where(User.id == order_response.wholesaler_id)
+        select(User).where(User.id == order.wholesaler_id)
     ).first()
+    
+    # Build order response with wholesaler_name
+    order_data = {
+        **order.__dict__,
+        'wholesaler_name': wholesaler_profile.full_name if wholesaler_profile else None
+    }
+    order_response = OrderResponse(**order_data)
 
     items_response = [
         OrderItemResponse(
@@ -688,8 +697,6 @@ async def get_distributor_order_details(
     return OrderDetailResponse(
         **order_response.model_dump(),
         items=items_response,
-        distributor_name=distributor_profile.full_name if distributor_profile else None,
-        wholesaler_name=wholesaler_profile.full_name if wholesaler_profile else None
     )
 
 

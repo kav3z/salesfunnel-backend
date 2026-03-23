@@ -34,7 +34,14 @@ class Order(SQLModel, table=True):
     )
     status: OrderStatus = Field(default=OrderStatus.PENDING, nullable=False, index=True)
     notes: Optional[str] = Field(default=None)
-    
+
+    # Delivery data
+    delivery_address: str = Field(nullable=False)
+    is_delivery: bool = Field(nullable=False)
+    contact_name: str = Field(nullable=False)
+    contact_phone_no: str = Field(nullable=False)
+    delivery_instructions: Optional[str] = Field(default=None)
+
     # Timestamps
     created_at: datetime = Field(default_factory=datetime.utcnow)
     paid_at: Optional[datetime] = Field(default=None)

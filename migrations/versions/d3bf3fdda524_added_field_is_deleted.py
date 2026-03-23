@@ -20,10 +20,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Only add the new column
-    op.add_column('products', sa.Column('is_deleted', sa.Boolean(), server_default=sa.text('false'), nullable=False))
+    # Column already exists in database, skipping
+    pass
 
 
 def downgrade() -> None:
-    # Only remove the new column
-    op.drop_column('products', 'is_deleted')
+    # Column already exists in database, skipping
+    pass
