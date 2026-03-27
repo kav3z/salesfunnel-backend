@@ -544,3 +544,36 @@ async def get_wholesaler_order_details(
         items=items_response,
         wholesaler_name=current_user.full_name
     )
+
+
+@v1_wholesaler.delete(
+    "/cart",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_role([UserRole.WHOLESALER]))]
+)
+async def delete_cart(
+    db: db_dependency,
+    current_user: CurrentUser
+):
+    """
+    Delete the wholesaler's entire cart and all items.
+    Accessible only by Wholesalers.
+    """
+    # Get cart
+    cart = db.exec(
+        select(Cart).where(Cart.wholesaler_id == current_user.id)
+    ).first()
+    
+    if not cart:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Cart not found"
+        )
+    
+    # Delete all cart items
+    for item in cart.items:
+        db.delete(item)
+    
+    # Delete cart
+    db.delete(cart)
+    db.commit()
