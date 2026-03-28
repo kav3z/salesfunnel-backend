@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     # Server Configuration
     HOST: str = "0.0.0.0"
     PORT: int = 8000
+
+    # Paystaack
+    PAYSTACK_API_URL: str = "https://api.paystack.co"
+    PAYSTACK_SECRET_KEY: str = "some-secret-key"
     
     # Database Configuration
     DATABASE_URL: str = "sqlite:///./salesfunnel.db"

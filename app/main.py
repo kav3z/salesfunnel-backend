@@ -4,6 +4,7 @@ from .api.v1.distributor import v1_distributor
 from .api.v1.wholesaler import v1_wholesaler
 from .api.v1.admin import v1_admin
 from .api.v1.category import v1_category
+from .api.v1.payment import v1_payment
 from .core.database import init_db
 
 # external imports
@@ -26,6 +27,7 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all headers
 )
 
+app.include_router(v1_payment)
 app.include_router(v1_auth)
 app.include_router(v1_category)
 app.include_router(v1_admin)

@@ -9,15 +9,16 @@ from app.models.user import User, UserRole
 from app.core.dependencies import get_current_user, DBSession, require_role, CurrentUser
 
 # External imports
-from typing import List, Optional
+import json
+import random
+import string
+from typing import Optional
 from uuid import UUID
 from decimal import Decimal
 from datetime import datetime
 from math import ceil
-from fastapi import APIRouter, Depends, status, HTTPException, Query
 from sqlmodel import select, func
-import random
-import string
+from fastapi import APIRouter, Depends, status, HTTPException, Query, Request
 
 
 v1_wholesaler = APIRouter(prefix="/v1/wholesaler", tags=['v1_wholesaler'])
@@ -311,18 +312,19 @@ async def get_cart(
 @v1_wholesaler.post(
     "/orders",
     response_model=OrderDetailResponse,
-    status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_role([UserRole.WHOLESALER]))]
+    status_code=status.HTTP_201_CREATED
 )
 async def create_order(
     order_data: OrderCreate,
     db: db_dependency,
-    current_user: CurrentUser
+    current_user: CurrentUser = Depends(get_current_user)  # Move to parameter
 ):
-    """
-    Create a new order from the wholesaler's cart.
-    Accessible only by Wholesalers.
-    """
+    """Create a new order from the wholesaler's cart."""
+    
+    # Check role inside handler instead of dependency
+    if current_user.role != UserRole.WHOLESALER:
+        raise HTTPException(status_code=403, detail="Only wholesalers can create orders")
+    
     # Get cart
     cart = db.exec(
         select(Cart).where(Cart.wholesaler_id == current_user.id)
@@ -577,3 +579,49 @@ async def delete_cart(
     # Delete cart
     db.delete(cart)
     db.commit()
+
+@v1_wholesaler.post("/paystack")
+async def paystack_webhook(request: Request):
+    """
+    Simple webhook endpoint that receives Paystack payment events
+    and prints the data to console.
+    
+    Paystack will send POST requests to this endpoint for payment events:
+    - charge.success
+    - charge.failed
+    - transfer.success
+    - transfer.failed
+    - etc.
+    """
+    try:
+        # Get the raw data from Paystack
+        body = await request.body()
+        data = json.loads(body)
+        
+        # Print the webhook event to console
+        print("\n" + "="*80)
+        print("PAYSTACK WEBHOOK RECEIVED")
+        print("="*80)
+        print(json.dumps(data, indent=2))
+        print("="*80 + "\n")
+        
+        # Extract key information
+        event = data.get("event", "unknown")
+        amount = data.get("data", {}).get("amount", 0)
+        reference = data.get("data", {}).get("reference", "unknown")
+        status = data.get("data", {}).get("status", "unknown")
+        
+        print(f"Event: {event}")
+        print(f"Reference: {reference}")
+        print(f"Amount: {amount}")
+        print(f"Status: {status}")
+        
+        # Return success response to Paystack
+        return {"status": "received", "message": "Webhook data received successfully"}
+        
+    except json.JSONDecodeError:
+        print("ERROR: Invalid JSON received from Paystack")
+        return {"status": "error", "message": "Invalid JSON"}
+    except Exception as e:
+        print(f"ERROR processing webhook: {str(e)}")
+        return {"status": "error", "message": str(e)}
