@@ -1,5 +1,6 @@
 # internal imports
 from app.core.config import settings
+from app.core.dependencies import CurrentUser
 
 # external imports
 import httpx
@@ -25,7 +26,7 @@ class InitializePaymentResponse(BaseModel):
     data: dict = None
 
 @v1_payment.post("/initialize", response_model=InitializePaymentResponse)
-async def initialize_payment(request: InitializePaymentRequest):
+async def initialize_payment(request: InitializePaymentRequest, current_user: CurrentUser):
     """
     Initialize a Paystack transaction and send payment request to customer.
     
@@ -37,7 +38,7 @@ async def initialize_payment(request: InitializePaymentRequest):
     Returns:
         Authorization URL to redirect customer for payment
     """
-    
+    print(current_user)
     # Validate Paystack secret key is configured
     if not settings.PAYSTACK_SECRET_KEY:
         raise HTTPException(

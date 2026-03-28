@@ -6,7 +6,7 @@ from app.models.product import Product
 from app.models.order import Order, OrderStatus
 from app.models.order_item import OrderItem
 from app.models.user import User, UserRole
-from app.core.dependencies import get_current_user, DBSession, require_role, CurrentUser
+from app.core.dependencies import DBSession, require_role, CurrentUser
 
 # External imports
 import json
@@ -579,6 +579,7 @@ async def delete_cart(
     # Delete cart
     db.delete(cart)
     db.commit()
+
 
 @v1_wholesaler.post("/paystack")
 async def paystack_webhook(request: Request):
