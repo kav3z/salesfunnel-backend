@@ -317,7 +317,7 @@ async def get_cart(
 async def create_order(
     order_data: OrderCreate,
     db: db_dependency,
-    current_user: CurrentUser = Depends(get_current_user)  # Move to parameter
+    current_user: CurrentUser  # Move to parameter
 ):
     """Create a new order from the wholesaler's cart."""
     
