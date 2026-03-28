@@ -52,7 +52,8 @@ def create_access_token(user_id: str, email: str, user_role: str, full_name: str
         "user_id": user_id,
         "email": email,
         "role": user_role,
-        "full_name": full_name
+        "full_name": full_name,
+        "is_active": is_active
     }
     expires = datetime.now(timezone.utc) + expires_delta
     encode.update({"exp": expires}) # type: ignore

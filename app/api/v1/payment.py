@@ -2,13 +2,12 @@
 from app.core.config import settings
 from app.core.dependencies import CurrentUser, DBSession
 from app.models.order import Order
+from app.models.distributor_profile import DistributorProfile
 
 # external imports
 import httpx
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, EmailStr
-from app.core.config import settings
-from decimal import Decimal
+from pydantic import BaseModel
 from sqlalchemy import desc
 from sqlmodel import select
 
@@ -17,11 +16,6 @@ db_dependency = DBSession
 
 PAYSTACK_API_URL: str = "https://api.paystack.co"
 PAYSTACK_SECRET_KEY = settings.PAYSTACK_SECRET_KEY
-# Request Schema
-class InitializePaymentRequest(BaseModel):
-    email: EmailStr
-    amount: int  # in kobo (e.g., 20000 = 200 naira)
-    subaccount: str  # Distributor's Paystack subaccount code
 
 # Response Schema
 class InitializePaymentResponse(BaseModel):
@@ -30,8 +24,7 @@ class InitializePaymentResponse(BaseModel):
     data: dict | None = None
 
 @v1_payment.post("/initialize", response_model=InitializePaymentResponse)
-async def initialize_payment(
-    request: InitializePaymentRequest, 
+async def initialize_payment( 
     current_user: CurrentUser,
     db: db_dependency  # Add this parameter
 ):
@@ -61,16 +54,9 @@ async def initialize_payment(
     # Get the last order made by the user (wholesaler)
     statement = select(Order)\
         .where(Order.wholesaler_id == id)\
-        .order_by(desc(Order.created_at))
+        .order_by(desc(Order.created_at)) # type: ignore
     
     order = db.exec(statement).first()
-    print(order)
-
-    # get order amount from the order data
-    amount = order.total_amount
-    paystack_amount = int(amount*100)
-    print("amount:", paystack_amount)
-    
     
     if not order:
         raise HTTPException(
@@ -78,11 +64,32 @@ async def initialize_payment(
             detail="No orders found for this wholesaler"
         )
     
+    print(order)
+
+    # Get order amount from the order data
+    amount = order.total_amount
+    paystack_amount = int(amount*100)
+
+    print("Distributor_id: ", order.distributor_id)
+   
+   # Get distributor subaccount_code
+    statement = select(DistributorProfile)\
+        .where(DistributorProfile.user_id == order.distributor_id)
+    
+    distributor = db.exec(statement).first()
+    if not distributor:
+        raise HTTPException(
+            status_code=404,
+            detail="Error! distributor was not found"
+        )
+
+    subaccount_code = distributor.subaccount_code
+    
     # Prepare Paystack request payload
     payload = {
         "email": email,
         "amount": paystack_amount,
-        "subaccount": request.subaccount
+        "subaccount": subaccount_code
     }
     
     # Prepare headers

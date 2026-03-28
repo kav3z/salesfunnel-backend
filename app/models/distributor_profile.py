@@ -32,6 +32,9 @@ class DistributorProfile(SQLModel, table=True):
     bank_name: str = Field(..., max_length=100)
     account_name: str = Field(..., max_length=255)
     account_number: str = Field(..., max_length=20)
+
+    # paystack information
+    subaccount_code: str = Field(nullable=True)
     
     # Verification Documents (file paths/URLs)
     cac_certificate_url: Optional[str] = Field(default=None, max_length=500)
