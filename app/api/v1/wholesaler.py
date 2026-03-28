@@ -311,7 +311,6 @@ async def get_cart(
 
 @v1_wholesaler.post(
     "/orders",
-    response_model=OrderDetailResponse,
     status_code=status.HTTP_201_CREATED
 )
 async def create_order(

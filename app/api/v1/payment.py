@@ -1,6 +1,7 @@
 # internal imports
 from app.core.config import settings
-from app.core.dependencies import CurrentUser
+from app.core.dependencies import CurrentUser, DBSession
+from app.models.order import Order
 
 # external imports
 import httpx
@@ -8,8 +9,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, EmailStr
 from app.core.config import settings
 from decimal import Decimal
+from sqlalchemy import desc
+from sqlmodel import select
 
 v1_payment = APIRouter(prefix="/v1/payment", tags=["v1_payment"])
+db_dependency = DBSession
 
 PAYSTACK_API_URL: str = "https://api.paystack.co"
 PAYSTACK_SECRET_KEY = settings.PAYSTACK_SECRET_KEY
@@ -23,10 +27,14 @@ class InitializePaymentRequest(BaseModel):
 class InitializePaymentResponse(BaseModel):
     status: str
     message: str
-    data: dict = None
+    data: dict | None = None
 
 @v1_payment.post("/initialize", response_model=InitializePaymentResponse)
-async def initialize_payment(request: InitializePaymentRequest, current_user: CurrentUser):
+async def initialize_payment(
+    request: InitializePaymentRequest, 
+    current_user: CurrentUser,
+    db: db_dependency  # Add this parameter
+):
     """
     Initialize a Paystack transaction and send payment request to customer.
     
@@ -38,7 +46,7 @@ async def initialize_payment(request: InitializePaymentRequest, current_user: Cu
     Returns:
         Authorization URL to redirect customer for payment
     """
-    print(current_user)
+
     # Validate Paystack secret key is configured
     if not settings.PAYSTACK_SECRET_KEY:
         raise HTTPException(
@@ -46,10 +54,34 @@ async def initialize_payment(request: InitializePaymentRequest, current_user: Cu
             detail="Paystack secret key not configured"
         )
     
+    # Get user id and email address from jwt token
+    id = current_user.id
+    email = current_user.email
+
+    # Get the last order made by the user (wholesaler)
+    statement = select(Order)\
+        .where(Order.wholesaler_id == id)\
+        .order_by(desc(Order.created_at))
+    
+    order = db.exec(statement).first()
+    print(order)
+
+    # get order amount from the order data
+    amount = order.total_amount
+    paystack_amount = int(amount*100)
+    print("amount:", paystack_amount)
+    
+    
+    if not order:
+        raise HTTPException(
+            status_code=404,
+            detail="No orders found for this wholesaler"
+        )
+    
     # Prepare Paystack request payload
     payload = {
-        "email": request.email,
-        "amount": request.amount,
+        "email": email,
+        "amount": paystack_amount,
         "subaccount": request.subaccount
     }
     
