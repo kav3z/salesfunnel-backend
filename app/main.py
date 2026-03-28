@@ -35,4 +35,9 @@ app.include_router(v1_distributor)
 app.include_router(v1_wholesaler)
 
 
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
+
 
