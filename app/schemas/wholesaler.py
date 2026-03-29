@@ -78,3 +78,9 @@ class WholesalerResponse(BaseModel):
     cac_certificate_url: Optional[str] = None
     tin_certificate_url: Optional[str] = None
     utility_bill_url: Optional[str] = None
+
+class WholesalerDashboardResponse(BaseModel):
+    """Wholesaler Dashboard Statistics Response"""
+    orders_in_progress: int = Field(..., description="Count of orders with PAID status")
+    action_required_unpaid: int = Field(..., description="Count of orders with PENDING status")
+    completed_this_month_revenue: float = Field(..., description="Total revenue from completed orders this month")

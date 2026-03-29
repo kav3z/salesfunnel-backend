@@ -60,3 +60,16 @@ class DistributorListResponse(BaseModel):
     business_phone: str
     business_email: str
     is_verified: bool
+
+class MonthlyRevenueItem(BaseModel):
+    """Monthly revenue data point"""
+    month: str = Field(..., description="Month abbreviation (Jan, Feb, Mar, etc.)")
+    revenue: float = Field(..., description="Total revenue for the month")
+
+
+class DistributorDashboardResponse(BaseModel):
+    """Distributor Dashboard Statistics Response"""
+    total_revenue: float = Field(..., description="Total revenue from all paid orders")
+    total_products: int = Field(..., description="Total number of products uploaded by distributor")
+    orders_by_status: dict[str, int] = Field(..., description="Count of orders by status (paid, completed)")
+    monthly_revenue_trend: list[MonthlyRevenueItem] = Field(..., description="Monthly revenue trend data")

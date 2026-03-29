@@ -1,6 +1,7 @@
 # Local imports
 from app.schemas.cart import CartItemAdd, CartItemUpdate, CartItemRemove, CartItemResponse, CartResponse
 from app.schemas.order import OrderCreate, OrderResponse, OrderDetailResponse, OrderItemResponse, OrderListResponse
+from app.schemas.wholesaler import WholesalerDashboardResponse
 from app.models.cart import Cart, CartItem
 from app.models.product import Product
 from app.models.order import Order, OrderStatus
@@ -592,3 +593,76 @@ async def delete_cart(
     # Delete cart
     db.delete(cart)
     db.commit()
+
+
+
+@v1_wholesaler.get(
+    "/dashboard",
+    response_model=WholesalerDashboardResponse,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_role([UserRole.WHOLESALER]))]
+)
+async def get_wholesaler_dashboard(
+    db: db_dependency,
+    current_user: CurrentUser
+):
+    """
+    Retrieve wholesaler dashboard statistics.
+    
+    Provides an overview of:
+    - Orders in progress (PAID status)
+    - Orders requiring action (PENDING status)
+    - Revenue from completed orders this month
+    
+    Args:
+        None (uses authenticated wholesaler)
+    
+    Returns:
+        WholesalerDashboardResponse: Dashboard statistics
+        
+    Raises:
+        HTTPException 403: If user is not a wholesaler
+    """
+    wholesaler_id = current_user.id
+    
+    # Get current month boundaries
+    now = datetime.utcnow()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    # Next month first day
+    if now.month == 12:
+        month_end = now.replace(year=now.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    else:
+        month_end = now.replace(month=now.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    
+    # 1. Count orders in progress (PAID status)
+    orders_in_progress_query = select(func.count()).select_from(Order).where(
+        Order.wholesaler_id == wholesaler_id,
+        Order.status == OrderStatus.PAID
+    )
+    orders_in_progress = db.exec(orders_in_progress_query).one()
+    
+    # 2. Count action required unpaid (PENDING status)
+    action_required_unpaid_query = select(func.count()).select_from(Order).where(
+        Order.wholesaler_id == wholesaler_id,
+        Order.status == OrderStatus.PENDING
+    )
+    action_required_unpaid = db.exec(action_required_unpaid_query).one()
+    
+    # 3. Calculate completed this month revenue
+    completed_this_month_query = select(func.sum(OrderItem.subtotal)).select_from(OrderItem).join(
+        Order, OrderItem.order_id == Order.id
+    ).where(
+        Order.wholesaler_id == wholesaler_id,
+        Order.status == OrderStatus.COMPLETED,
+        Order.created_at >= month_start,
+        Order.created_at < month_end
+    )
+    
+    completed_this_month_revenue = db.exec(completed_this_month_query).one() or Decimal(0)
+    completed_this_month_revenue = float(completed_this_month_revenue)
+    
+    return WholesalerDashboardResponse(
+        orders_in_progress=orders_in_progress,
+        action_required_unpaid=action_required_unpaid,
+        completed_this_month_revenue=completed_this_month_revenue
+    )
