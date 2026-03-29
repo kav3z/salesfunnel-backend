@@ -36,7 +36,7 @@ class Order(SQLModel, table=True):
     notes: Optional[str] = Field(default=None)
 
     # Delivery data
-    delivery_address: str = Field(nullable=False)
+    delivery_address: str | None = Field(default=None, nullable=True)
     is_delivery: bool = Field(nullable=False)
     contact_name: str = Field(nullable=False)
     contact_phone_no: str = Field(nullable=False)

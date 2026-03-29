@@ -9,7 +9,7 @@ from app.models.order import OrderStatus
 class OrderCreate(BaseModel):
     """Schema for creating an order from cart"""
     notes: Optional[str] = Field(None, max_length=500, description="Optional order notes")
-    delivery_address: str
+    delivery_address: str | None = None
     is_delivery: bool
     contact_name: str
     contact_phone_no: str

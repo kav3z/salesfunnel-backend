@@ -1,15 +1,19 @@
 # internal imports
 from app.core.config import settings
 from app.core.dependencies import CurrentUser, DBSession
-from app.models.order import Order
+from app.models.order import Order, OrderStatus
 from app.models.distributor_profile import DistributorProfile
+from app.models.user import User
+from app.models.order_item import OrderItem
+from app.models.product import Product
 
 # external imports
+import json
 import httpx
-from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import desc
 from sqlmodel import select
+from fastapi import APIRouter, HTTPException, Request
 
 v1_payment = APIRouter(prefix="/v1/payment", tags=["v1_payment"])
 db_dependency = DBSession
@@ -141,3 +145,72 @@ async def initialize_payment(
             status_code=500,
             detail=f"Payment initialization failed: {str(e)}"
         )
+
+
+@v1_payment.post("/paystack-hook")
+async def paystack_webhook(request: Request, db: db_dependency):
+    """
+    Simple webhook endpoint that receives Paystack payment events
+    and prints the data to console.
+    
+    Paystack will send POST requests to this endpoint for payment events:
+    - charge.success
+    - charge.failed
+    - transfer.success
+    - transfer.failed
+    - etc.
+    """
+    try:
+        # Get the raw data from Paystack
+        body = await request.body()
+        data = json.loads(body)        
+
+        # gets the wholesaler email from the webhook payload
+        customer = data.get('data', {}).get('customer', {})
+        email = customer.get('email')
+        
+        # gets the last order made by the wholesaler
+        last_order = db.exec(
+            select(Order)
+            .join(User, Order.wholesaler_id == User.id) # type: ignore
+            .where(User.email == email)
+            .order_by(desc(Order.created_at))  # type: ignore
+        ).first()
+
+        # Check if order exists BEFORE making changes
+        if not last_order:
+            return {"status": "error", "message": "No order found for this customer"}
+
+        # changes the status of the order made by the wholesaler to paid
+        last_order.status = OrderStatus.PAID
+        db.add(last_order)
+        db.commit()
+
+        # gets all order items belonging to the last order
+        order_items = db.exec(
+            select(OrderItem)
+            .where(OrderItem.order_id == last_order.id)
+        ).all()
+
+        # Reduce stock for each product in the order
+        for order_item in order_items:
+            product = db.exec(
+                select(Product)
+                .where(Product.id == order_item.product_id)
+            ).first()
+
+            if product:
+                product.stock_quantity -= order_item.quantity
+                db.add(product)
+
+        db.commit()
+        
+        # Return success response to Paystack
+        return {"status": "received", "message": "Webhook data received successfully"}
+        
+    except json.JSONDecodeError:
+        print("ERROR: Invalid JSON received from Paystack")
+        return {"status": "error", "message": "Invalid JSON"}
+    except Exception as e:
+        print(f"ERROR processing webhook: {str(e)}")
+        return {"status": "error", "message": str(e)}
