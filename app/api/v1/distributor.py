@@ -8,7 +8,9 @@ from app.models.distributor_profile import DistributorProfile
 from app.core.dependencies import get_current_user, DBSession, require_role, CurrentUser, DistributorUser
 from app.models.order import Order, OrderStatus
 from app.models.order_item import OrderItem
+from app.models.payment import Payment, PaymentStatus
 from app.schemas.order import OrderResponse, OrderDetailResponse, OrderListResponse, OrderStatusUpdate, OrderItemResponse
+from app.schemas.payment import PaymentListResponse, PaymentInfoResponse
 
 # External imports
 from typing import Annotated, Optional, List
@@ -782,7 +784,6 @@ async def update_distributor_order_status(
     return OrderResponse.model_validate(order)
 
 
-
 @v1_distributor.get(
     "/distributor/dashboard",
     response_model=DistributorDashboardResponse,
@@ -858,4 +859,91 @@ async def get_distributor_dashboard(
             MonthlyRevenueItem(month="Feb", revenue=1500),
             MonthlyRevenueItem(month="Mar", revenue=9100)
         ]
+    )
+
+
+
+@v1_distributor.get(
+    "/distributor/payments",
+    response_model=PaymentListResponse,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_role([UserRole.DISTRIBUTOR]))]
+)
+async def get_distributor_payments(
+    db: db_dependency,
+    current_user: CurrentUser,
+    page: int = Query(default=1, ge=1, description="Page number"),
+    page_size: int = Query(default=10, ge=1, le=100, description="Items per page")
+):
+    """
+    Retrieve paginated payment information for a distributor.
+    
+    Returns all payments received by the distributor from wholesalers, including:
+    - Order number
+    - Wholesaler name
+    - Payment amount
+    - Payment date and time
+    - Reference number
+    - Payment status
+    
+    Args:
+        page: Page number for pagination (default: 1)
+        page_size: Number of items per page (default: 10, max: 100)
+    
+    Returns:
+        PaymentListResponse: Paginated list of payments with metadata
+        
+    Raises:
+        HTTPException 403: If user is not a distributor
+    """
+    distributor_id = current_user.id
+    print(distributor_id)
+    
+    # Get total count
+    total_query = select(func.count()).select_from(Payment).where(
+        Payment.distributor_id == distributor_id
+    )
+    total = db.exec(total_query).one()
+    
+    # Calculate pagination
+    total_pages = ceil(total / page_size) if total > 0 else 1
+    offset = (page - 1) * page_size
+    
+    # Get paginated payments
+    payments_query = (
+        select(Payment)
+        .where(Payment.distributor_id == distributor_id)
+        .order_by(desc(Payment.initiated_at))
+        .offset(offset)
+        .limit(page_size)
+    )
+    
+    payments = db.exec(payments_query).all()
+    
+    # Build response
+    payment_items = []
+    for payment in payments:
+        # Split initiated_at into date and time
+        initiated_dt = payment.initiated_at
+        date_str = initiated_dt.strftime("%Y-%m-%d")
+        time_str = initiated_dt.strftime("%H:%M %p")
+        
+        payment_items.append(
+            PaymentInfoResponse(
+                order_number=payment.order_number,
+                wholesaler_name=payment.wholesaler_name,
+                amount=payment.amount,
+                date=date_str,
+                time=time_str,
+                reference_number=payment.reference_number,
+                status=payment.status
+            )
+        )
+    
+    return PaymentListResponse(
+        payments=payment_items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages
     )

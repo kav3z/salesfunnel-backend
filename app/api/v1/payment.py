@@ -6,6 +6,8 @@ from app.models.distributor_profile import DistributorProfile
 from app.models.user import User
 from app.models.order_item import OrderItem
 from app.models.product import Product
+from app.models.payment import Payment, PaymentStatus
+from decimal import Decimal
 
 # external imports
 import json
@@ -14,6 +16,7 @@ from pydantic import BaseModel
 from sqlalchemy import desc
 from sqlmodel import select
 from fastapi import APIRouter, HTTPException, Request
+from datetime import datetime
 
 v1_payment = APIRouter(prefix="/v1/payment", tags=["v1_payment"])
 db_dependency = DBSession
@@ -165,15 +168,30 @@ async def paystack_webhook(request: Request, db: db_dependency):
         body = await request.body()
         data = json.loads(body)        
 
-        # gets the wholesaler email from the webhook payload
+        # gets the wholesaler email and from the webhook payload
         customer = data.get('data', {}).get('customer', {})
         email = customer.get('email')
+
+        # gets additional data from webhook payload
+        event_data = data.get('data', {})
+
+        reference = event_data.get("reference", {})
+        amount = int(event_data.get("amount"))
+        real_amount = amount/100
+        payment_date = event_data.get("paid_at", {})
+        channel = event_data.get("channel", {})
+
+        
+        # gets the user by email first
+        wholesaler = db.exec(select(User).where(User.email == email)).first()
+        
+        if not wholesaler:
+            return {"status": "error", "message": "User not found"}
         
         # gets the last order made by the wholesaler
         last_order = db.exec(
             select(Order)
-            .join(User, Order.wholesaler_id == User.id) # type: ignore
-            .where(User.email == email)
+            .where(Order.wholesaler_id == wholesaler.id)
             .order_by(desc(Order.created_at))  # type: ignore
         ).first()
 
@@ -203,6 +221,29 @@ async def paystack_webhook(request: Request, db: db_dependency):
                 product.stock_quantity -= order_item.quantity
                 db.add(product)
 
+        db.commit()
+
+        # wholesaler already fetched above, no need to fetch again
+
+
+        # preparing part of the payment data
+        new_payment_data = {
+            "order_number": last_order.order_number,
+            "wholesaler_name": wholesaler.full_name,
+            "amount": Decimal(str(real_amount)),
+            "reference_number": reference,
+            "status": PaymentStatus.PENDING, 
+            "distributor_id": last_order.distributor_id
+        }
+
+        # creating a payment row in the db
+        new_payment = Payment(
+            **new_payment_data,
+            order_id=last_order.id,
+            payment_method=channel,
+            initiated_at=datetime.fromisoformat(payment_date.replace('Z', '+00:00'))
+            )
+        db.add(new_payment)
         db.commit()
         
         # Return success response to Paystack

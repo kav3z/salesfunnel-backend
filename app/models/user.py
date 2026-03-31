@@ -8,10 +8,10 @@ if TYPE_CHECKING:
     from .order import Order
     from .product import Product
     from .notification import Notification
-    from .payment import Payment
     from .wholesaler_profile import WholesalerProfile
     from .distributor_profile import DistributorProfile
     from .cart import Cart
+    from .payment import Payment
 
 
 class UserRole(str, Enum):
@@ -44,7 +44,6 @@ class User(SQLModel, table=True):
     )
     products: list["Product"] = Relationship(back_populates="distributor")
     notifications: list["Notification"] = Relationship(back_populates="user")
-    payments_verified: list["Payment"] = Relationship(back_populates="verified_by")
     
     # Profile relationships
     wholesaler_profile: Optional["WholesalerProfile"] = Relationship(back_populates="user")
@@ -52,3 +51,6 @@ class User(SQLModel, table=True):
     
     # Cart relationship (for wholesalers)
     cart: Optional["Cart"] = Relationship(back_populates="wholesaler")
+    
+    # Payment relationships (for distributors receiving payments)
+    payments: list["Payment"] = Relationship(back_populates="distributor")

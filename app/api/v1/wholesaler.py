@@ -595,7 +595,6 @@ async def delete_cart(
     db.commit()
 
 
-
 @v1_wholesaler.get(
     "/dashboard",
     response_model=WholesalerDashboardResponse,
@@ -650,7 +649,7 @@ async def get_wholesaler_dashboard(
     
     # 3. Calculate completed this month revenue
     completed_this_month_query = select(func.sum(OrderItem.subtotal)).select_from(OrderItem).join(
-        Order, OrderItem.order_id == Order.id
+        Order, OrderItem.order_id == Order.id # type: ignore
     ).where(
         Order.wholesaler_id == wholesaler_id,
         Order.status == OrderStatus.COMPLETED,

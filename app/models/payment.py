@@ -8,13 +8,13 @@ import uuid
 if TYPE_CHECKING:
     from .order import Order
     from .user import User
+    from .distributor_profile import DistributorProfile
 
 
 class PaymentStatus(str, Enum):
     PENDING = "pending"
     VERIFIED = "verified"
-    APPROVED = "approved"
-    REJECTED = "rejected"
+
 
 
 class PaymentMethod(str, Enum):
@@ -31,33 +31,27 @@ class Payment(SQLModel, table=True):
         unique=True,
         index=True
     )
+    distributor_id: uuid.UUID = Field(
+        foreign_key="users.id",
+        nullable=False,
+        index=True
+    )
     reference_number: str = Field(unique=True, index=True, nullable=False)
     amount: Decimal = Field(
         nullable=False,
         decimal_places=2,
         max_digits=10
     )
-    payment_method: PaymentMethod = Field(
-        default=PaymentMethod.BANK_TRANSFER,
+    payment_method: str = Field(
         nullable=False
     )
-    bank_details: Optional[dict] = Field(default=None, sa_column=Column(JSON))
-    proof_image_url: Optional[str] = Field(default=None)
     status: PaymentStatus = Field(default=PaymentStatus.PENDING, nullable=False, index=True)
-    rejection_reason: Optional[str] = Field(default=None)
+    order_number: str = Field(nullable=False)
+    wholesaler_name: str = Field(nullable=False)
     
     # Timestamps
     initiated_at: datetime = Field(default_factory=datetime.utcnow)
-    verified_at: Optional[datetime] = Field(default=None)
-    approved_at: Optional[datetime] = Field(default=None)
-    rejected_at: Optional[datetime] = Field(default=None)
-    
-    # Verified by
-    verified_by_id: Optional[uuid.UUID] = Field(
-        default=None,
-        foreign_key="users.id"
-    )
     
     # Relationships
     order: "Order" = Relationship(back_populates="payment")
-    verified_by: Optional["User"] = Relationship(back_populates="payments_verified")
+    distributor: "User" = Relationship(back_populates="payments")
