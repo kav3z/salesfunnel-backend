@@ -23,7 +23,7 @@ class UserRole(str, Enum):
 class User(SQLModel, table=True):
     __tablename__ = "users" # type: ignore
     
-    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     email: str = Field(unique=True, index=True, nullable=False)
     password_hash: str = Field(nullable=False)
     full_name: str = Field(nullable=False)

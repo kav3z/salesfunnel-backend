@@ -30,18 +30,18 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return bcrypt.checkpw(password_bytes, hashed_bytes)
 
 
-def authenticate_user(email: str, password: str, db: Session) -> User | None:
+def authenticate_user(email: str, password: str, db: Session) -> User | str:
     """Authenticate user by email and password"""
     user = db.exec(select(User).where(User.email == email)).first()
     
     if not user:
-        return None
+        return "no_email"
     
     # Truncate password before verification
     truncated_password = password[:72]
     
     if not verify_password(truncated_password, user.password_hash):
-        return None
+        return "no_pass"
     
     return user
 

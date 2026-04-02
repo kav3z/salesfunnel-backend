@@ -20,6 +20,7 @@ from app.core.dependencies import get_current_user, DBSession
 from typing import List, Optional
 from uuid import UUID
 from decimal import Decimal
+import pytz
 from datetime import datetime
 from math import ceil
 from pydantic import BaseModel, Field
@@ -278,7 +279,7 @@ async def override_order_status(
     order.status = override_data.status
     
     # Update relevant timestamps based on new status
-    now = datetime.utcnow()
+    now = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
     if override_data.status == OrderStatus.PAID:
         order.paid_at = now
     elif override_data.status == OrderStatus.APPROVED:
@@ -372,7 +373,7 @@ async def block_user(
     
     # Block the user
     user.is_active = False
-    user.updated_at = datetime.utcnow()
+    user.updated_at = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
     
     db.add(user)
     db.commit()
@@ -452,7 +453,7 @@ async def unblock_user(
     
     # Unblock the user
     user.is_active = True
-    user.updated_at = datetime.utcnow()
+    user.updated_at = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
     
     db.add(user)
     db.commit()
@@ -550,7 +551,7 @@ async def verify_user(
     
     # Verify the profile
     profile.is_verified = True
-    profile.updated_at = datetime.utcnow()
+    profile.updated_at = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
     
     db.add(profile)
     db.commit()
@@ -630,7 +631,7 @@ async def unverify_user(
     
     # Unverify the profile
     profile.is_verified = False
-    profile.updated_at = datetime.utcnow()
+    profile.updated_at = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
     
     db.add(profile)
     db.commit()

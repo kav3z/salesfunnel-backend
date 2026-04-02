@@ -11,6 +11,7 @@ from app.core.security import create_access_token, authenticate_user, hash_passw
 
 # External imports
 import os
+import pytz
 import shutil
 from sqlmodel import select
 from typing import Annotated, List, Optional
@@ -62,19 +63,26 @@ async def login_for_access_token(
     """
     user = authenticate_user(login_data.username, login_data.password, db)
     
-    if not user:
+    if user == "no_email":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
+            detail="Email not found!",
             headers={"WWW-Authenticate": "Bearer"}
         )
     
-    if not user.is_active:
+    if user == "no_pass":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Wrong Password!",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+    
+    if isinstance(user, str) or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account is inactive"
         )
-    print(settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
+
     token = create_access_token(
         email=user.email,
         user_id=str(user.id),
@@ -118,7 +126,7 @@ async def update_password(
     
     # Update password
     user.password_hash = hash_password(new_password)
-    user.updated_at = datetime.utcnow()
+    user.updated_at = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
     
     db.add(user)
     db.commit()
@@ -416,6 +424,7 @@ async def register_distributor(
         bank_name=bank_name,
         account_name=account_name,
         account_number=account_number,
+        subaccount_code="a-short-code",
         cac_certificate_url=cac_certificate_path,
         tin_certificate_url=tin_certificate_path,
         utility_bill_url=utility_bill_path,
@@ -586,7 +595,7 @@ async def update_user_profile(
             if update_data.account_number is not None:
                 wholesaler_profile.account_number = update_data.account_number
             
-            wholesaler_profile.updated_at = datetime.utcnow()
+            wholesaler_profile.updated_at = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
             db.add(wholesaler_profile)
     
     # Update distributor profile if applicable
@@ -619,7 +628,7 @@ async def update_user_profile(
             if update_data.account_number is not None:
                 distributor_profile.account_number = update_data.account_number
             
-            distributor_profile.updated_at = datetime.utcnow()
+            distributor_profile.updated_at = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
             db.add(distributor_profile)
     
     db.commit()

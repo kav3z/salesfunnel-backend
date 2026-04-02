@@ -11,6 +11,7 @@ from app.core.dependencies import DBSession, require_role, CurrentUser
 
 # External imports
 import random
+import pytz
 import string
 from typing import Optional
 from uuid import UUID
@@ -28,7 +29,7 @@ db_dependency = DBSession
 
 def generate_order_number() -> str:
     """Generate a unique order number"""
-    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M")
+    timestamp = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None).strftime("%Y%m%d%H%M")
     random_suffix = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
     return f"ORD-{timestamp}-{random_suffix}"
 
@@ -91,7 +92,7 @@ def clear_cart(db: db_dependency, cart: Cart) -> None:
     """Clear all items from a cart after order is placed"""
     for item in cart.items:
         db.delete(item)
-    cart.updated_at = datetime.utcnow()
+    cart.updated_at = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
     db.add(cart)
 
 
@@ -165,7 +166,7 @@ async def add_to_cart(
         db.add(cart_item)
     
     # Update cart timestamp
-    cart.updated_at = datetime.utcnow()
+    cart.updated_at = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
     db.add(cart)
     db.commit()
     db.refresh(cart)
@@ -229,7 +230,7 @@ async def update_cart_item(
     db.add(cart_item)
     
     # Update cart timestamp
-    cart.updated_at = datetime.utcnow()
+    cart.updated_at = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
     db.add(cart)
     db.commit()
     db.refresh(cart)
@@ -281,7 +282,7 @@ async def remove_from_cart(
     db.delete(cart_item)
     
     # Update cart timestamp
-    cart.updated_at = datetime.utcnow()
+    cart.updated_at = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
     db.add(cart)
     db.commit()
     db.refresh(cart)
@@ -473,7 +474,7 @@ async def get_wholesaler_orders(
                 order_number=o.order_number,
                 wholesaler_id=o.wholesaler_id,
                 wholesaler_name=current_user.full_name,
-                distributor_id=o.distributor_id,
+                distributor_name=(db.exec(select(User).where(User.id == o.distributor_id)).first()).full_name, # type: ignore
                 total_amount=o.total_amount,
                 status=o.status,
                 notes=o.notes,
@@ -542,15 +543,18 @@ async def get_wholesaler_order_details(
             unit_price=order_item.unit_price,
             subtotal=order_item.subtotal
         ))
+    
+    distributor = db.exec(select(User).where(User.id == order.distributor_id)).first()
+    distributor_name = distributor.full_name if distributor else "Unknown"
 
     return OrderDetailResponse(
         id=order.id,
         order_number=order.order_number,
         wholesaler_id=order.wholesaler_id,
-        distributor_id=order.distributor_id,
         total_amount=order.total_amount,
         status=order.status,
         notes=order.notes,
+        distributor_name=distributor_name,
         created_at=order.created_at,
         paid_at=order.paid_at,
         approved_at=order.approved_at,
@@ -625,7 +629,8 @@ async def get_wholesaler_dashboard(
     wholesaler_id = current_user.id
     
     # Get current month boundaries
-    now = datetime.utcnow()
+    now = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None) 
+    
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     # Next month first day
     if now.month == 12:

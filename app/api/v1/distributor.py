@@ -8,9 +8,9 @@ from app.models.distributor_profile import DistributorProfile
 from app.core.dependencies import get_current_user, DBSession, require_role, CurrentUser, DistributorUser
 from app.models.order import Order, OrderStatus
 from app.models.order_item import OrderItem
-from app.models.payment import Payment, PaymentStatus
+from app.models.payment import Payment
 from app.schemas.order import OrderResponse, OrderDetailResponse, OrderListResponse, OrderStatusUpdate, OrderItemResponse
-from app.schemas.payment import PaymentListResponse, PaymentInfoResponse
+from app.schemas.payment import PaymentListResponse, PaymentInfoResponse, PaymentStatus as PaymentStatusSchema
 
 # External imports
 from typing import Annotated, Optional, List
@@ -20,6 +20,7 @@ from math import ceil
 from decimal import Decimal
 import shutil
 import os
+import pytz
 from datetime import datetime
 from fastapi import APIRouter, Depends, status, HTTPException, Query, File, UploadFile, Form
 from sqlmodel import select, func, or_, desc
@@ -454,7 +455,7 @@ async def update_distributor_product(
         setattr(product, field, value)
     
     # Update timestamp
-    product.updated_at = datetime.utcnow()
+    product.updated_at = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
     
     db.add(product)
     db.commit()
@@ -767,7 +768,7 @@ async def update_distributor_order_status(
     order.status = status_update.status
     
     # Update relevant timestamp
-    now = datetime.utcnow()
+    now = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
     if status_update.status == OrderStatus.APPROVED:
         order.approved_at = now
     elif status_update.status == OrderStatus.READY_FOR_PICKUP:
@@ -862,7 +863,6 @@ async def get_distributor_dashboard(
     )
 
 
-
 @v1_distributor.get(
     "/distributor/payments",
     response_model=PaymentListResponse,
@@ -936,7 +936,7 @@ async def get_distributor_payments(
                 date=date_str,
                 time=time_str,
                 reference_number=payment.reference_number,
-                status=payment.status
+                status=PaymentStatusSchema(payment.status.value)
             )
         )
     

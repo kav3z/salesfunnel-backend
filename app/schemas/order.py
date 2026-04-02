@@ -35,7 +35,7 @@ class OrderResponse(BaseModel):
     order_number: str
     wholesaler_id: UUID
     wholesaler_name: str
-    distributor_id: UUID
+    distributor_name: str
     total_amount: Decimal
     status: OrderStatus
     notes: Optional[str]
