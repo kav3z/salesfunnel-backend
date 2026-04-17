@@ -14,7 +14,6 @@ if TYPE_CHECKING:
 class OrderStatus(str, Enum):
     PENDING = "pending"
     PAID = "paid"
-    APPROVED = "approved"
     READY_FOR_PICKUP = "ready_for_pickup"
     COMPLETED = "completed"
     CANCELLED = "cancelled"

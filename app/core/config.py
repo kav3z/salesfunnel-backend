@@ -50,28 +50,14 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: Optional[str] = None
     EMAIL_FROM: str = "noreply@salesfunnel.com"
     
-    # SMS Configuration (Future)
-    SMS_PROVIDER: Optional[str] = None
-    SMS_API_KEY: Optional[str] = None
-    SMS_FROM: Optional[str] = None
-    
     # Notification Settings
     ENABLE_EMAIL_NOTIFICATIONS: bool = False
     ENABLE_SMS_NOTIFICATIONS: bool = False
     
-    # Business Rules
-    ORDER_FULFILLMENT_HOURS: int = 2
-    PAYMENT_VERIFICATION_TIMEOUT_MINUTES: int = 30
-    
-    # Logging
-    LOG_LEVEL: str = "INFO"
-    LOG_FILE: str = "./logs/app.log"
-    
-    # Redis Configuration (optional)
-    REDIS_URL: Optional[str] = None
-    
-    # Monitoring (optional)
-    SENTRY_DSN: Optional[str] = None
+    # Cloudinary
+    CLOUDINARY_API_KEY: str
+    CLOUDINARY_API_SECRET: str
+    CLOUDINARY_CLOUD_NAME: str
     
     # Admin Settings
     ADMIN_EMAIL: str = "admin@salesfunnel.com"
@@ -91,7 +77,7 @@ def get_settings() -> Settings:
     Get cached settings instance.
     Uses lru_cache to ensure settings are only loaded once.
     """
-    return Settings()
+    return Settings() # type: ignore
 
 
 # Create a global settings instance for easy import

@@ -1,11 +1,12 @@
 # Local imports
-from app.schemas.product import ProductCreate, ProductUpdate, ProductResponse, ProductListResponse
+from app.schemas.product import ProductUpdate, ProductResponse, ProductListResponse
+from app.core.helpers import save_upload_file
 from app.schemas.distributor import DistributorListResponse, DistributorDashboardResponse, MonthlyRevenueItem
 from app.models.product import Product
 from app.models.category import Category
 from app.models.user import User, UserRole
 from app.models.distributor_profile import DistributorProfile
-from app.core.dependencies import get_current_user, DBSession, require_role, CurrentUser, DistributorUser
+from app.core.dependencies import DBSession, require_role, CurrentUser
 from app.models.order import Order, OrderStatus
 from app.models.order_item import OrderItem
 from app.models.payment import Payment
@@ -13,13 +14,11 @@ from app.schemas.order import OrderResponse, OrderDetailResponse, OrderListRespo
 from app.schemas.payment import PaymentListResponse, PaymentInfoResponse, PaymentStatus as PaymentStatusSchema
 
 # External imports
-from typing import Annotated, Optional, List
+from typing import Optional, List
 from uuid import UUID
 import uuid
 from math import ceil
 from decimal import Decimal
-import shutil
-import os
 import pytz
 from datetime import datetime
 from fastapi import APIRouter, Depends, status, HTTPException, Query, File, UploadFile, Form
@@ -174,26 +173,13 @@ async def add_product_to_distributor_catalog(
     image_url_path = None
     if image:
         try:
-            # Ensure static directory exists
-            upload_dir = "uploads/product_images"
-            os.makedirs(upload_dir, exist_ok=True)
-            
-            # Generate unique filename
-            # Use 'or ""' to ensure it's a string, even if filename is None (satisfies type checker)
-            file_extension = os.path.splitext(image.filename or "")[1]
-            unique_filename = f"{uuid.uuid4()}{file_extension}"
-            file_path = f"{upload_dir}/{unique_filename}"
-            
-            # Save file
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(image.file, buffer)
-            
-            # Set image URL (relative path or absolute URL based on your serving setup)
-            image_url_path = f"/static/product_images/{unique_filename}"
+            image_url_path = await save_upload_file(
+                image, str(distributor_id), name, f"distributor/{distributor_id}/products"
+            )
         except Exception as e:
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-                detail=f"Could not upload image: {str(e)}"
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to upload image: {str(e)}"
             )
     
     # Create new product
@@ -751,8 +737,7 @@ async def update_distributor_order_status(
     # Validate status transition
     valid_transitions = {
         OrderStatus.PENDING: [OrderStatus.PAID, OrderStatus.CANCELLED],
-        OrderStatus.PAID: [OrderStatus.APPROVED, OrderStatus.CANCELLED],
-        OrderStatus.APPROVED: [OrderStatus.READY_FOR_PICKUP, OrderStatus.CANCELLED],
+        OrderStatus.PAID: [OrderStatus.CANCELLED],
         OrderStatus.READY_FOR_PICKUP: [OrderStatus.COMPLETED],
         OrderStatus.COMPLETED: [],
         OrderStatus.CANCELLED: []
@@ -769,9 +754,7 @@ async def update_distributor_order_status(
     
     # Update relevant timestamp
     now = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
-    if status_update.status == OrderStatus.APPROVED:
-        order.approved_at = now
-    elif status_update.status == OrderStatus.READY_FOR_PICKUP:
+    if status_update.status == OrderStatus.READY_FOR_PICKUP:
         order.ready_at = now
     elif status_update.status == OrderStatus.COMPLETED:
         order.completed_at = now

@@ -1,5 +1,6 @@
 # Local imports
 from app.schemas.user import *
+from app.core.helpers import save_upload_file, validate_file_type
 from app.schemas.wholesaler import WholesalerResponse
 from app.schemas.distributor import DistributorResponse
 from app.models.user import User, UserRole
@@ -10,16 +11,13 @@ from app.core.dependencies import get_current_user, DBSession
 from app.core.security import create_access_token, authenticate_user, hash_password, verify_password
 
 # External imports
-import os
 import pytz
-import shutil
 from sqlmodel import select
-from typing import Annotated, List, Optional
+from typing import Annotated
 from datetime import timedelta, datetime
 from uuid import uuid4
 from fastapi import APIRouter, Depends, status, HTTPException, BackgroundTasks, UploadFile, File, Form
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from pydantic import BaseModel, EmailStr
 
 
 v1_auth = APIRouter(prefix="/v1/auth", tags=['v1_auth'])
@@ -27,28 +25,6 @@ v1_auth = APIRouter(prefix="/v1/auth", tags=['v1_auth'])
 oauth2_bearer = OAuth2PasswordBearer(tokenUrl="/v1/auth/token")
 
 db_dependency = DBSession
-
-# Directory for uploaded documents
-WHOLESALER_UPLOAD_DIR = "uploads/wholesaler_documents"
-DISTRIBUTOR_UPLOAD_DIR = "uploads/distributor_documents"
-os.makedirs(WHOLESALER_UPLOAD_DIR, exist_ok=True)
-os.makedirs(DISTRIBUTOR_UPLOAD_DIR, exist_ok=True)
-
-
-async def save_upload_file(upload_file: UploadFile, user_id: str, file_type: str, upload_dir: str) -> str:
-    """Save uploaded file and return the file path"""
-    if not upload_file.filename:
-        raise ValueError("Upload file must have a filename")
-    
-    file_extension = upload_file.filename.split(".")[-1]
-    filename = f"{user_id}_{file_type}_{uuid4()}.{file_extension}"
-    file_path = os.path.join(upload_dir, filename)
-    
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(upload_file.file, buffer)
-    
-    return file_path
-
 
 @v1_auth.post("/token", response_model=Token)
 async def login_for_access_token(
@@ -198,23 +174,14 @@ async def register_wholesaler(
     
     # Validate file types
     allowed_extensions = {"pdf", "jpg", "jpeg", "png"}
-    for file, name in [
-        (cac_certificate, "CAC Certificate"),
-        (tin_certificate, "TIN Certificate"),
-        (utility_bill, "Utility Bill")
-    ]:
-        if not file.filename:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"{name} filename is missing"
-            )
-        file_ext = file.filename.split(".")[-1].lower()
-        if file_ext not in allowed_extensions:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"{name} must be PDF, JPG, JPEG, or PNG"
-            )
+    docs = [
+            (cac_certificate, "CAC Certificate"),
+            (tin_certificate, "TIN Certificate"),
+            (utility_bill, "Utility Bill")
+        ]
     
+    validate_file_type(allowed_extensions, docs)
+        
     # Create User account using Business details
     new_user = User(
         email=business_email,
@@ -232,13 +199,13 @@ async def register_wholesaler(
     # Save uploaded documents
     try:
         cac_certificate_path = await save_upload_file(
-            cac_certificate, str(new_user.id), "cac_certificate", WHOLESALER_UPLOAD_DIR
+            cac_certificate, str(new_user.id), "cac_certificate", f"wholesaler/documents/{new_user.id}"
         )
         tin_certificate_path = await save_upload_file(
-            tin_certificate, str(new_user.id), "tin_certificate", WHOLESALER_UPLOAD_DIR
+            tin_certificate, str(new_user.id), "tin_certificate", f"wholesaler/documents/{new_user.id}"
         )
         utility_bill_path = await save_upload_file(
-            utility_bill, str(new_user.id), "utility_bill", WHOLESALER_UPLOAD_DIR
+            utility_bill, str(new_user.id), "utility_bill", f"wholesaler/documents{new_user.id}"
         )
     except Exception as e:
         db.delete(new_user)
@@ -359,22 +326,13 @@ async def register_distributor(
     
     # Validate file types
     allowed_extensions = {"pdf", "jpg", "jpeg", "png"}
-    for file, name in [
-        (cac_certificate, "CAC Certificate"),
-        (tin_certificate, "TIN Certificate"),
-        (utility_bill, "Utility Bill")
-    ]:
-        if not file.filename:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"{name} filename is missing"
-            )
-        file_ext = file.filename.split(".")[-1].lower()
-        if file_ext not in allowed_extensions:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"{name} must be PDF, JPG, JPEG, or PNG"
-            )
+    docs = [
+            (cac_certificate, "CAC Certificate"),
+            (tin_certificate, "TIN Certificate"),
+            (utility_bill, "Utility Bill")
+        ]
+    
+    validate_file_type(allowed_extensions, docs)
     
     # Create User account using Business details
     new_user = User(
@@ -393,13 +351,13 @@ async def register_distributor(
     # Save uploaded documents
     try:
         cac_certificate_path = await save_upload_file(
-            cac_certificate, str(new_user.id), "cac_certificate", DISTRIBUTOR_UPLOAD_DIR
+            cac_certificate, str(new_user.id), "cac_certificate", f"distributor/{new_user.id}"
         )
         tin_certificate_path = await save_upload_file(
-            tin_certificate, str(new_user.id), "tin_certificate", DISTRIBUTOR_UPLOAD_DIR
+            tin_certificate, str(new_user.id), "tin_certificate", f"distributor/{new_user.id}"
         )
         utility_bill_path = await save_upload_file(
-            utility_bill, str(new_user.id), "utility_bill", DISTRIBUTOR_UPLOAD_DIR
+            utility_bill, str(new_user.id), "utility_bill", f"distributor/{new_user.id}"
         )
     except Exception as e:
         db.delete(new_user)
