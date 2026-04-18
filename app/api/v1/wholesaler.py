@@ -670,3 +670,43 @@ async def get_wholesaler_dashboard(
         action_required_unpaid=action_required_unpaid,
         completed_this_month_revenue=completed_this_month_revenue
     )
+
+@v1_wholesaler.delete(
+    "/orders/{order_id}",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_role([UserRole.WHOLESALER]))]
+)
+async def delete_pending_order(
+    order_id: str,
+    db: db_dependency,
+    current_user: CurrentUser,
+) -> dict:
+    """
+    Delete an order if its status is PENDING.
+    
+    Only allows deletion of orders with PENDING status.
+    Returns error if order is in any other status.
+    """
+    order = db.exec(
+        select(Order).where(Order.id == order_id)
+    ).first()
+    
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    
+    # Verify the current user is the wholesaler for this order
+    if order.wholesaler_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this order")
+    
+    # Check if order status is PENDING
+    if order.status != OrderStatus.PENDING:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete order with status '{order.status}'. Only PENDING orders can be deleted."
+        )
+    
+    # Delete the order
+    db.delete(order)
+    db.commit()
+    
+    return {"message": "Order deleted successfully", "order_id": str(order_id)}

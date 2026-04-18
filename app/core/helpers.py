@@ -1,5 +1,7 @@
+# local imports
 from app.core.config import settings
 
+# external imports 
 import cloudinary
 from cloudinary import CloudinaryImage
 import cloudinary.uploader
