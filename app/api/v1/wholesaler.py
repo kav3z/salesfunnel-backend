@@ -8,9 +8,11 @@ from app.models.order import Order, OrderStatus
 from app.models.order_item import OrderItem
 from app.models.user import User, UserRole
 from app.core.dependencies import DBSession, require_role, CurrentUser
+from app.core.helpers import audit_action
 
 # External imports
 import random
+import time
 import pytz
 import string
 from typing import Optional
@@ -19,7 +21,7 @@ from decimal import Decimal
 from datetime import datetime
 from math import ceil
 from sqlmodel import select, func
-from fastapi import APIRouter, Depends, status, HTTPException, Query
+from fastapi import APIRouter, Depends, status, HTTPException, Query, BackgroundTasks, Request
 
 
 v1_wholesaler = APIRouter(prefix="/v1/wholesaler", tags=['v1_wholesaler'])
@@ -106,7 +108,9 @@ def clear_cart(db: db_dependency, cart: Cart) -> None:
 async def add_to_cart(
     item_data: CartItemAdd,
     db: db_dependency,
-    current_user: CurrentUser
+    current_user: CurrentUser,
+    background_tasks: BackgroundTasks,
+    request: Request
 ):
     """
     Add a product to the wholesaler's cart.
@@ -170,6 +174,19 @@ async def add_to_cart(
     db.add(cart)
     db.commit()
     db.refresh(cart)
+
+    background_tasks.add_task(
+        audit_action,
+        user_id=current_user.id,
+        user_email=current_user.email,
+        action_type="ADD_TO_CART",
+        entity_type="cart_item",
+        entity_id=str(item_data.product_id),
+        old_value=None,
+        new_value={"product_id": str(item_data.product_id), "quantity": item_data.quantity},
+        ip_address=request.client.host if request.client else "",
+        user_agent=request.headers.get("user-agent", "")
+    )
     
     return build_cart_response(cart, db)
 
@@ -183,7 +200,9 @@ async def add_to_cart(
 async def update_cart_item(
     item_data: CartItemUpdate,
     db: db_dependency,
-    current_user: CurrentUser
+    current_user: CurrentUser,
+    background_tasks: BackgroundTasks,
+    request: Request
 ):
     """
     Update product quantity in the wholesaler's cart.
@@ -225,6 +244,9 @@ async def update_cart_item(
             detail=f"Insufficient stock. Only {product.stock_quantity} available"
         )
     
+    # Store old quantity for audit
+    old_quantity = cart_item.quantity
+    
     # Update quantity
     cart_item.quantity = item_data.quantity
     db.add(cart_item)
@@ -234,6 +256,20 @@ async def update_cart_item(
     db.add(cart)
     db.commit()
     db.refresh(cart)
+    
+    # Log to audit trail
+    background_tasks.add_task(
+        audit_action,
+        user_id=current_user.id,
+        user_email=current_user.email,
+        action_type="UPDATE",
+        entity_type="cart_item",
+        entity_id=str(item_data.product_id),
+        old_value={"quantity": old_quantity},
+        new_value={"quantity": item_data.quantity},
+        ip_address=request.client.host if request.client else "",
+        user_agent=request.headers.get("user-agent", "")
+    )
     
     return build_cart_response(cart, db)
 
@@ -317,7 +353,9 @@ async def get_cart(
 async def create_order(
     order_data: OrderCreate,
     db: db_dependency,
-    current_user: CurrentUser  # Move to parameter
+    current_user: CurrentUser,
+    background_tasks: BackgroundTasks,
+    request: Request
 ):
     """Create a new order from the wholesaler's cart."""
     
@@ -424,6 +462,24 @@ async def create_order(
     # Clear the cart (Option 1: keep cart, remove items)
     clear_cart(db, cart)
     db.commit()
+    
+    # Log to audit trail
+    background_tasks.add_task(
+        audit_action,
+        user_id=current_user.id,
+        user_email=current_user.email,
+        action_type="CREATE",
+        entity_type="Order",
+        entity_id=str(created_orders[0].id) if created_orders else None,
+        old_value=None,
+        new_value={
+            "order_count": len(created_orders),
+            "total_amount": str(sum(o.total_amount for o in created_orders)),
+            "order_numbers": [o.order_number for o in created_orders]
+        },
+        ip_address=request.client.host if request.client else "",
+        user_agent=request.headers.get("user-agent", "")
+    )
     
     return "order has been created"
     
@@ -671,6 +727,7 @@ async def get_wholesaler_dashboard(
         completed_this_month_revenue=completed_this_month_revenue
     )
 
+
 @v1_wholesaler.delete(
     "/orders/{order_id}",
     status_code=status.HTTP_200_OK,
@@ -680,6 +737,8 @@ async def delete_pending_order(
     order_id: str,
     db: db_dependency,
     current_user: CurrentUser,
+    background_tasks: BackgroundTasks,
+    request: Request
 ) -> dict:
     """
     Delete an order if its status is PENDING.
@@ -705,8 +764,29 @@ async def delete_pending_order(
             detail=f"Cannot delete order with status '{order.status}'. Only PENDING orders can be deleted."
         )
     
+    # Store order details for audit before deletion
+    order_details = {
+        "order_number": order.order_number,
+        "total_amount": str(order.total_amount),
+        "status": order.status
+    }
+    
     # Delete the order
     db.delete(order)
     db.commit()
+    
+    # Log to audit trail
+    background_tasks.add_task(
+        audit_action,
+        user_id=current_user.id,
+        user_email=current_user.email,
+        action_type="DELETE",
+        entity_type="Order",
+        entity_id=order_id,
+        old_value=order_details,
+        new_value=None,
+        ip_address=request.client.host if request.client else "",
+        user_agent=request.headers.get("user-agent", "")
+    )
     
     return {"message": "Order deleted successfully", "order_id": str(order_id)}

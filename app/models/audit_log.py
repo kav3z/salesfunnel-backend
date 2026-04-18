@@ -2,6 +2,12 @@ from datetime import datetime
 from typing import Optional
 from sqlmodel import SQLModel, Field, Column, JSON
 import uuid
+import pytz
+
+
+def get_lagos_time():
+    """Get current time in Lagos timezone without tzinfo"""
+    return datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
 
 
 class AuditLog(SQLModel, table=True):
@@ -30,4 +36,4 @@ class AuditLog(SQLModel, table=True):
     extra_data: Optional[dict] = Field(default=None, sa_column=Column(JSON))
     
     # Timestamp
-    timestamp: datetime = Field(default_factory=datetime.utcnow, index=True)
+    timestamp: datetime = Field(default_factory=get_lagos_time, index=True)

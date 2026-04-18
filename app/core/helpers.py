@@ -1,11 +1,16 @@
 # local imports
 from app.core.config import settings
+from app.models.audit_log import AuditLog
+from app.core.database import get_db
 
-# external imports 
+# external imports
+import pytz
+from datetime import datetime
 import cloudinary
 from cloudinary import CloudinaryImage
 import cloudinary.uploader
 import os
+from typing import Optional
 from dotenv import load_dotenv
 from fastapi import UploadFile, HTTPException, status
 
@@ -54,3 +59,47 @@ async def save_upload_file(upload_file: UploadFile, user_id: str, file_type: str
     cloudinary_url = CloudinaryImage(full_public_id).build_url()
     
     return cloudinary_url
+
+def get_lagos_time():
+    """Get current time in Lagos timezone without tzinfo"""
+    return datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
+
+def audit_action(
+    user_id, 
+    user_email, 
+    action_type, 
+    entity_type, 
+    entity_id, 
+    old_value, 
+    new_value,
+    ip_address,
+    user_agent,
+    extra_data: Optional[dict] = None
+):
+    # Create a new session for this background task
+    db_generator = get_db()
+    db = next(db_generator)
+    try:
+        try:
+            audit_log = AuditLog(
+                user_id=user_id,
+                user_email=user_email,
+                action_type=action_type,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                old_value=old_value,
+                new_value=new_value,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                extra_data=extra_data,
+            )
+            db.add(audit_log)
+            db.commit()
+            print("successfully audited")
+        except Exception as e:
+            print(f"Error during audit logging: {str(e)}")
+            print(f"Error type: {type(e).__name__}")
+            db.rollback()  # Rollback in case of error
+    finally:
+        db.close()
+        db_generator.close()

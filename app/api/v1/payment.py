@@ -1,5 +1,6 @@
 # internal imports
 from app.core.config import settings
+from app.core.helpers import audit_action
 from app.core.dependencies import CurrentUser, DBSession
 from app.models.order import Order, OrderStatus
 from app.models.distributor_profile import DistributorProfile
@@ -15,8 +16,9 @@ import httpx
 from pydantic import BaseModel
 from sqlalchemy import desc
 from sqlmodel import select
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, BackgroundTasks
 from datetime import datetime
+import pytz
 
 v1_payment = APIRouter(prefix="/v1/payment", tags=["v1_payment"])
 db_dependency = DBSession
@@ -33,7 +35,9 @@ class InitializePaymentResponse(BaseModel):
 @v1_payment.post("/initialize", response_model=InitializePaymentResponse)
 async def initialize_payment( 
     current_user: CurrentUser,
-    db: db_dependency  # Add this parameter
+    db: db_dependency,
+    background_tasks: BackgroundTasks,
+    request: Request
 ):
     """
     Initialize a Paystack transaction and send payment request to customer.
@@ -120,6 +124,24 @@ async def initialize_payment(
         
         # Check if Paystack returned success
         if paystack_data.get("status") == True:
+            # Log to audit trail
+            background_tasks.add_task(
+                audit_action,
+                user_id=current_user.id,
+                user_email=current_user.email,
+                action_type="INITIALIZE",
+                entity_type="Payment",
+                entity_id=str(order.id),
+                old_value=None,
+                new_value={
+                    "order_number": order.order_number,
+                    "amount": str(amount),
+                    "reference": paystack_data["data"]["reference"]
+                },
+                ip_address=request.client.host if request.client else "",
+                user_agent=request.headers.get("user-agent", "")
+            )
+            
             return InitializePaymentResponse(
                 status="success",
                 message="Payment initialization successful",
@@ -151,7 +173,11 @@ async def initialize_payment(
 
 
 @v1_payment.post("/paystack-hook")
-async def paystack_webhook(request: Request, db: db_dependency):
+async def paystack_webhook(
+    request: Request, 
+    db: db_dependency,
+    background_tasks: BackgroundTasks
+):
     """
     Simple webhook endpoint that receives Paystack payment events
     and prints the data to console.
@@ -223,9 +249,6 @@ async def paystack_webhook(request: Request, db: db_dependency):
 
         db.commit()
 
-        # wholesaler already fetched above, no need to fetch again
-
-
         # preparing part of the payment data
         new_payment_data = {
             "order_number": last_order.order_number,
@@ -245,6 +268,26 @@ async def paystack_webhook(request: Request, db: db_dependency):
             )
         db.add(new_payment)
         db.commit()
+        
+        # Log to audit trail
+        background_tasks.add_task(
+            audit_action,
+            user_id=wholesaler.id,
+            user_email=wholesaler.email,
+            action_type="CONFIRM",
+            entity_type="Payment",
+            entity_id=str(last_order.id),
+            old_value={"status": "PENDING"},
+            new_value={
+                "status": "PAID",
+                "order_number": last_order.order_number,
+                "amount": str(real_amount),
+                "reference": reference,
+                "channel": channel
+            },
+            ip_address=request.client.host if request.client else "",
+            user_agent=request.headers.get("user-agent", "")
+        )
         
         # Return success response to Paystack
         return {"status": "received", "message": "Webhook data received successfully"}

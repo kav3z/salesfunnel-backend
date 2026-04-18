@@ -3,6 +3,7 @@ from app.schemas.product import ProductUpdate, ProductResponse, ProductListRespo
 from app.core.helpers import save_upload_file
 from app.schemas.distributor import DistributorListResponse, DistributorDashboardResponse, MonthlyRevenueItem
 from app.models.product import Product
+from app.core.helpers import audit_action
 from app.models.category import Category
 from app.models.user import User, UserRole
 from app.models.distributor_profile import DistributorProfile
@@ -21,7 +22,7 @@ from math import ceil
 from decimal import Decimal
 import pytz
 from datetime import datetime
-from fastapi import APIRouter, Depends, status, HTTPException, Query, File, UploadFile, Form
+from fastapi import APIRouter, Depends, status, HTTPException, Query, File, UploadFile, Form, BackgroundTasks, Request
 from sqlmodel import select, func, or_, desc
 
 
@@ -113,6 +114,8 @@ async def get_all_products(
 async def add_product_to_distributor_catalog(
     db: db_dependency,
     current_user: CurrentUser,
+    background_tasks: BackgroundTasks,  # Add this
+    request: Request,  # Add this
     sku: str = Form(...),
     name: str = Form(...),
     description: Optional[str] = Form(None),
@@ -191,7 +194,7 @@ async def add_product_to_distributor_catalog(
         stock_quantity=stock_quantity,
         distributor_id=distributor_id,
         category=category,
-        category_id=existing_category.id, # Link to category object as well
+        category_id=existing_category.id,
         image_url=image_url_path,
         is_available=is_available
     )
@@ -199,6 +202,27 @@ async def add_product_to_distributor_catalog(
     db.add(new_product)
     db.commit()
     db.refresh(new_product)
+    
+    # Log to audit trail
+    background_tasks.add_task(
+        audit_action,
+        user_id=current_user.id,
+        user_email=current_user.email,
+        action_type="CREATE",
+        entity_type="Product",
+        entity_id=str(new_product.id),
+        old_value=None,
+        new_value={
+            "sku": sku,
+            "name": name,
+            "price_per_case": str(price_per_case),
+            "stock_quantity": stock_quantity,
+            "category": category,
+            "is_available": is_available
+        },
+        ip_address=request.client.host if request.client else "",
+        user_agent=request.headers.get("user-agent", "")
+    )
     
     return ProductResponse.model_validate(new_product)
 
@@ -383,7 +407,9 @@ async def update_distributor_product(
     product_id: UUID,
     product_data: ProductUpdate,
     db: db_dependency,
-    current_user: CurrentUser
+    current_user: CurrentUser,
+    background_tasks: BackgroundTasks,  # Add this
+    request: Request  # Add this
 ):
     """
     Update product details for a distributor's catalog.
@@ -435,6 +461,14 @@ async def update_distributor_product(
             detail="Product not found in this distributor's catalog"
         )
     
+    # Store old values for audit
+    old_value = {
+        "name": product.name,
+        "price_per_case": str(product.price_per_case),
+        "stock_quantity": product.stock_quantity,
+        "is_available": product.is_available
+    }
+    
     # Update only provided fields
     update_data = product_data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
@@ -447,6 +481,20 @@ async def update_distributor_product(
     db.commit()
     db.refresh(product)
     
+    # Log to audit trail
+    background_tasks.add_task(
+        audit_action,
+        user_id=current_user.id,
+        user_email=current_user.email,
+        action_type="UPDATE",
+        entity_type="Product",
+        entity_id=str(product.id),
+        old_value=old_value,
+        new_value=update_data,
+        ip_address=request.client.host if request.client else "",
+        user_agent=request.headers.get("user-agent", "")
+    )
+    
     return ProductResponse.model_validate(product)
 
 
@@ -458,7 +506,9 @@ async def update_distributor_product(
 async def delete_distributor_product(
     product_id: UUID,
     db: db_dependency,
-    current_user: CurrentUser
+    current_user: CurrentUser,
+    background_tasks: BackgroundTasks,  # Add this
+    request: Request  # Add this
 ):
     """
     Remove a product from a distributor's catalog.
@@ -506,9 +556,17 @@ async def delete_distributor_product(
             detail="Product not found in this distributor's catalog"
         )
 
+    # Store product details for audit before deletion
+    product_details = {
+        "sku": product.sku,
+        "name": product.name,
+        "price_per_case": str(product.price_per_case),
+        "stock_quantity": product.stock_quantity,
+        "is_available": product.is_available
+    }
+
     print("Reaching this line")
     # Check for associated order items
-    # We query the OrderItem table directly to see if this product has ever been ordered
     has_orders = db.exec(select(OrderItem).where(OrderItem.product_id == product_id)).first()
     print(has_orders)
 
@@ -516,7 +574,6 @@ async def delete_distributor_product(
         print("can soft delete")
         # Soft delete: Product has history, so just mark it as deleted
         product.is_deleted = True
-        # Optionally, you might want to mark it unavailable too so it doesn't appear in sales
         product.is_available = False 
         db.add(product)
     else:
@@ -525,6 +582,21 @@ async def delete_distributor_product(
         
     db.commit()
     
+    # Log to audit trail
+    delete_type = "SOFT_DELETE" if has_orders else "HARD_DELETE"
+    background_tasks.add_task(
+        audit_action,
+        user_id=current_user.id,
+        user_email=current_user.email,
+        action_type="DELETE",
+        entity_type="Product",
+        entity_id=str(product_id),
+        old_value=product_details,
+        new_value={"delete_type": delete_type},
+        ip_address=request.client.host if request.client else "",
+        user_agent=request.headers.get("user-agent", "")
+    )
+
 
 @v1_distributor.get(
     "/distributor/orders/new",
@@ -699,7 +771,9 @@ async def update_distributor_order_status(
     order_id: UUID,
     status_update: OrderStatusUpdate,
     db: db_dependency,
-    current_user: CurrentUser
+    current_user: CurrentUser,
+    background_tasks: BackgroundTasks,  # Add this
+    request: Request  # Add this
 ):
     """
     Update the order status (e.g., "Packaging Confirmation").
@@ -749,6 +823,9 @@ async def update_distributor_order_status(
             detail=f"Invalid status transition from {order.status} to {status_update.status}"
         )
     
+    # Store old status for audit
+    old_status = order.status
+    
     # Update order status
     order.status = status_update.status
     
@@ -764,6 +841,20 @@ async def update_distributor_order_status(
     db.add(order)
     db.commit()
     db.refresh(order)
+    
+    # Log to audit trail
+    background_tasks.add_task(
+        audit_action,
+        user_id=current_user.id,
+        user_email=current_user.email,
+        action_type="UPDATE",
+        entity_type="Order",
+        entity_id=str(order.id),
+        old_value={"status": old_status},
+        new_value={"status": status_update.status, "order_number": order.order_number},
+        ip_address=request.client.host if request.client else "",
+        user_agent=request.headers.get("user-agent", "")
+    )
     
     return OrderResponse.model_validate(order)
 

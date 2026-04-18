@@ -7,6 +7,7 @@ from app.models.user import User, UserRole
 from app.core.config import settings
 from app.models.wholesaler_profile import WholesalerProfile
 from app.models.distributor_profile import DistributorProfile
+from app.core.helpers import audit_action
 from app.core.dependencies import get_current_user, DBSession
 from app.core.security import create_access_token, authenticate_user, hash_password, verify_password
 
@@ -16,7 +17,7 @@ from sqlmodel import select
 from typing import Annotated
 from datetime import timedelta, datetime
 from uuid import uuid4
-from fastapi import APIRouter, Depends, status, HTTPException, BackgroundTasks, UploadFile, File, Form
+from fastapi import APIRouter, Depends, status, HTTPException, BackgroundTasks, UploadFile, File, Form, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 
 
@@ -29,7 +30,9 @@ db_dependency = DBSession
 @v1_auth.post("/token", response_model=Token)
 async def login_for_access_token(
     db: db_dependency,
-    login_data: Annotated[OAuth2PasswordRequestForm, Depends()]
+    login_data: Annotated[OAuth2PasswordRequestForm, Depends()],
+    background_tasks: BackgroundTasks,  # Add this
+    request: Request  # Add this
 ):
     """
     Authenticate user with email and password.
@@ -68,6 +71,20 @@ async def login_for_access_token(
         expires_delta=timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
     )
     
+    # Log to audit trail
+    background_tasks.add_task(
+        audit_action,
+        user_id=user.id,
+        user_email=user.email,
+        action_type="LOGIN",
+        entity_type="User",
+        entity_id=str(user.id),
+        old_value=None,
+        new_value={"token_generated": True},
+        ip_address=request.client.host if request.client else "",
+        user_agent=request.headers.get("user-agent", "")
+    )
+    
     return Token(
         user_id=str(user.id),
         access_token=token,
@@ -81,6 +98,8 @@ async def update_password(
     current_password: str,
     new_password: str,
     db: db_dependency,
+    background_tasks: BackgroundTasks,  # Add this
+    request: Request,  # Add this
     current_user: User = Depends(get_current_user)
 ):
     """Update user password"""
@@ -107,6 +126,20 @@ async def update_password(
     db.add(user)
     db.commit()
     
+    # Log to audit trail
+    background_tasks.add_task(
+        audit_action,
+        user_id=user.id,
+        user_email=user.email,
+        action_type="UPDATE",
+        entity_type="User",
+        entity_id=str(user.id),
+        old_value=None,
+        new_value={"password_changed": True},
+        ip_address=request.client.host if request.client else "",
+        user_agent=request.headers.get("user-agent", "")
+    )
+    
     return {"detail": "Password successfully updated"}
 
 
@@ -114,6 +147,7 @@ async def update_password(
 async def register_wholesaler(
     db: db_dependency,
     background_tasks: BackgroundTasks,
+    request: Request,  # Add this
     # Form data fields
     password: str = Form(..., min_length=8, max_length=72),
     business_name: str = Form(..., min_length=2, max_length=255),
@@ -240,6 +274,26 @@ async def register_wholesaler(
     db.commit()
     db.refresh(wholesaler_profile)
     
+    # Log to audit trail
+    background_tasks.add_task(
+        audit_action,
+        user_id=new_user.id,
+        user_email=new_user.email,
+        action_type="CREATE",
+        entity_type="Wholesaler",
+        entity_id=str(wholesaler_profile.id),
+        old_value=None,
+        new_value={
+            "business_name": business_name,
+            "business_email": business_email,
+            "cac_registration_number": cac_registration_number,
+            "owner_full_name": owner_full_name,
+            "is_verified": False
+        },
+        ip_address=request.client.host if request.client else "",
+        user_agent=request.headers.get("user-agent", "")
+    )
+    
     return WholesalerResponse(
         id=str(wholesaler_profile.id),
         user_id=str(wholesaler_profile.user_id),
@@ -266,6 +320,7 @@ async def register_wholesaler(
 async def register_distributor(
     db: db_dependency,
     background_tasks: BackgroundTasks,
+    request: Request,  # Add this
     # Form data fields
     password: str = Form(..., min_length=8, max_length=72),
     business_name: str = Form(..., min_length=2, max_length=255),
@@ -393,6 +448,26 @@ async def register_distributor(
     db.commit()
     db.refresh(distributor_profile)
     
+    # Log to audit trail
+    background_tasks.add_task(
+        audit_action,
+        user_id=new_user.id,
+        user_email=new_user.email,
+        action_type="CREATE",
+        entity_type="Distributor",
+        entity_id=str(distributor_profile.id),
+        old_value=None,
+        new_value={
+            "business_name": business_name,
+            "business_email": business_email,
+            "cac_registration_number": cac_registration_number,
+            "owner_full_name": owner_full_name,
+            "is_verified": False
+        },
+        ip_address=request.client.host if request.client else "",
+        user_agent=request.headers.get("user-agent", "")
+    )
+    
     return DistributorResponse(
         id=str(distributor_profile.id),
         user_id=str(distributor_profile.user_id),
@@ -507,6 +582,8 @@ async def get_user_profile(
 async def update_user_profile(
     db: db_dependency,
     profile_update: UserProfileUpdate,
+    background_tasks: BackgroundTasks,  # Add this
+    request: Request,  # Add this
     current_user: User = Depends(get_current_user)
 ):
     """
@@ -523,6 +600,10 @@ async def update_user_profile(
             detail="User not found"
         )
     
+    # Store old values for audit
+    old_values = {}
+    new_values = {}
+    
     # Update wholesaler profile if applicable
     if user.role == UserRole.WHOLESALER and profile_update.wholesaler_profile is not None:
         wholesaler_profile = db.exec(
@@ -533,24 +614,44 @@ async def update_user_profile(
             update_data = profile_update.wholesaler_profile
             
             if update_data.business_name is not None:
+                old_values["business_name"] = wholesaler_profile.business_name
+                new_values["business_name"] = update_data.business_name
                 wholesaler_profile.business_name = update_data.business_name
             if update_data.business_address is not None:
+                old_values["business_address"] = wholesaler_profile.business_address
+                new_values["business_address"] = update_data.business_address
                 wholesaler_profile.business_address = update_data.business_address
             if update_data.business_phone is not None:
+                old_values["business_phone"] = wholesaler_profile.business_phone
+                new_values["business_phone"] = update_data.business_phone
                 wholesaler_profile.business_phone = update_data.business_phone
             if update_data.business_email is not None:
+                old_values["business_email"] = wholesaler_profile.business_email
+                new_values["business_email"] = update_data.business_email
                 wholesaler_profile.business_email = update_data.business_email
             if update_data.owner_full_name is not None:
+                old_values["owner_full_name"] = wholesaler_profile.owner_full_name
+                new_values["owner_full_name"] = update_data.owner_full_name
                 wholesaler_profile.owner_full_name = update_data.owner_full_name
             if update_data.owner_phone is not None:
+                old_values["owner_phone"] = wholesaler_profile.owner_phone
+                new_values["owner_phone"] = update_data.owner_phone
                 wholesaler_profile.owner_phone = update_data.owner_phone
             if update_data.owner_email is not None:
+                old_values["owner_email"] = wholesaler_profile.owner_email
+                new_values["owner_email"] = update_data.owner_email
                 wholesaler_profile.owner_email = update_data.owner_email
             if update_data.bank_name is not None:
+                old_values["bank_name"] = wholesaler_profile.bank_name
+                new_values["bank_name"] = update_data.bank_name
                 wholesaler_profile.bank_name = update_data.bank_name
             if update_data.account_name is not None:
+                old_values["account_name"] = wholesaler_profile.account_name
+                new_values["account_name"] = update_data.account_name
                 wholesaler_profile.account_name = update_data.account_name
             if update_data.account_number is not None:
+                old_values["account_number"] = wholesaler_profile.account_number
+                new_values["account_number"] = update_data.account_number
                 wholesaler_profile.account_number = update_data.account_number
             
             wholesaler_profile.updated_at = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
@@ -566,30 +667,64 @@ async def update_user_profile(
             update_data = profile_update.distributor_profile
             
             if update_data.business_name is not None:
+                old_values["business_name"] = distributor_profile.business_name
+                new_values["business_name"] = update_data.business_name
                 distributor_profile.business_name = update_data.business_name
             if update_data.business_address is not None:
+                old_values["business_address"] = distributor_profile.business_address
+                new_values["business_address"] = update_data.business_address
                 distributor_profile.business_address = update_data.business_address
             if update_data.business_phone is not None:
+                old_values["business_phone"] = distributor_profile.business_phone
+                new_values["business_phone"] = update_data.business_phone
                 distributor_profile.business_phone = update_data.business_phone
             if update_data.business_email is not None:
+                old_values["business_email"] = distributor_profile.business_email
+                new_values["business_email"] = update_data.business_email
                 distributor_profile.business_email = update_data.business_email
             if update_data.owner_full_name is not None:
+                old_values["owner_full_name"] = distributor_profile.owner_full_name
+                new_values["owner_full_name"] = update_data.owner_full_name
                 distributor_profile.owner_full_name = update_data.owner_full_name
             if update_data.owner_phone is not None:
+                old_values["owner_phone"] = distributor_profile.owner_phone
+                new_values["owner_phone"] = update_data.owner_phone
                 distributor_profile.owner_phone = update_data.owner_phone
             if update_data.owner_email is not None:
+                old_values["owner_email"] = distributor_profile.owner_email
+                new_values["owner_email"] = update_data.owner_email
                 distributor_profile.owner_email = update_data.owner_email
             if update_data.bank_name is not None:
+                old_values["bank_name"] = distributor_profile.bank_name
+                new_values["bank_name"] = update_data.bank_name
                 distributor_profile.bank_name = update_data.bank_name
             if update_data.account_name is not None:
+                old_values["account_name"] = distributor_profile.account_name
+                new_values["account_name"] = update_data.account_name
                 distributor_profile.account_name = update_data.account_name
             if update_data.account_number is not None:
+                old_values["account_number"] = distributor_profile.account_number
+                new_values["account_number"] = update_data.account_number
                 distributor_profile.account_number = update_data.account_number
             
             distributor_profile.updated_at = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
             db.add(distributor_profile)
     
     db.commit()
+    
+    # Log to audit trail
+    background_tasks.add_task(
+        audit_action,
+        user_id=user.id,
+        user_email=user.email,
+        action_type="UPDATE",
+        entity_type="UserProfile",
+        entity_id=str(user.id),
+        old_value=old_values if old_values else None,
+        new_value=new_values if new_values else None,
+        ip_address=request.client.host if request.client else "",
+        user_agent=request.headers.get("user-agent", "")
+    )
     
     # Return updated profile
     return await get_user_profile(db, current_user)

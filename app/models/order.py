@@ -4,11 +4,17 @@ from sqlmodel import SQLModel, Field, Relationship
 from decimal import Decimal
 from enum import Enum
 import uuid
+import pytz
 
 if TYPE_CHECKING:
     from .user import User
     from .order_item import OrderItem
     from .payment import Payment
+
+
+def get_lagos_time():
+    """Get current time in Lagos timezone without tzinfo"""
+    return datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
 
 
 class OrderStatus(str, Enum):
@@ -42,7 +48,7 @@ class Order(SQLModel, table=True):
     delivery_instructions: Optional[str] = Field(default=None)
 
     # Timestamps
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=get_lagos_time)
     paid_at: Optional[datetime] = Field(default=None)
     approved_at: Optional[datetime] = Field(default=None)
     ready_at: Optional[datetime] = Field(default=None)
