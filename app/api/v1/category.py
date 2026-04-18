@@ -1,5 +1,5 @@
 from typing import List
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Request
 from sqlmodel import  select
 import uuid
 
@@ -27,11 +27,18 @@ async def create_category(db: db_dependency, category: CategoryCreate):
     db.commit()
     db.refresh(new_category)
 
-@v1_category.get("/", response_model=List[Category])
-def list_categories(db: db_dependency):
+@v1_category.get("/", response_model=List[CategoryRead])
+def list_categories(db: db_dependency, request: Request):
     """
     List all categories.
     """
+    # Extract request data
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+    
+    # You can log this or do something with it
+    print(f"IP: {ip_address}, User-Agent: {user_agent}")
+    
     categories = db.exec(select(Category)).all()
     return categories
 
