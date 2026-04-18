@@ -406,13 +406,13 @@ async def register_distributor(
     # Save uploaded documents
     try:
         cac_certificate_path = await save_upload_file(
-            cac_certificate, str(new_user.id), "cac_certificate", f"distributor/{new_user.id}"
+            cac_certificate, str(new_user.id), "cac_certificate", f"distributor/documents/{new_user.id}"
         )
         tin_certificate_path = await save_upload_file(
-            tin_certificate, str(new_user.id), "tin_certificate", f"distributor/{new_user.id}"
+            tin_certificate, str(new_user.id), "tin_certificate", f"distributor/documents/{new_user.id}"
         )
         utility_bill_path = await save_upload_file(
-            utility_bill, str(new_user.id), "utility_bill", f"distributor/{new_user.id}"
+            utility_bill, str(new_user.id), "utility_bill", f"distributor/documents/{new_user.id}"
         )
     except Exception as e:
         db.delete(new_user)
