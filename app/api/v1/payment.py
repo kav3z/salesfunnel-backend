@@ -298,3 +298,20 @@ async def paystack_webhook(
     except Exception as e:
         print(f"ERROR processing webhook: {str(e)}")
         return {"status": "error", "message": str(e)}
+
+@v1_payment.post("/bank-list")
+async def list_of_supported_banks():
+    token = settings.PAYSTACK_SECRET_KEY
+    headers = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            "https://api.paystack.co/bank", 
+            headers=headers
+        )
+    bank_list = response.json()["data"]
+
+    banks = []
+    for bank in bank_list:
+        banks.append(bank["name"])
+
+    return {"list_of_banks": banks}
