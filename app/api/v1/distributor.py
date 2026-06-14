@@ -123,10 +123,11 @@ async def add_product_to_distributor_catalog(
     stock_quantity: int = Form(...),
     category: str = Form(...),
     is_available: bool = Form(True),
+    image_url: Optional[str] = Form(None),
     image: Optional[UploadFile] = File(None)
 ):
     """
-    Add a new product to a distributor's catalog with optional image upload.
+    Add a new product to a distributor's catalog with optional image upload or image URL.
     
     This endpoint accepts Form data instead of JSON to support file uploads.
     """
@@ -184,6 +185,8 @@ async def add_product_to_distributor_catalog(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to upload image: {str(e)}"
             )
+    elif image_url:
+        image_url_path = image_url
     
     # Create new product
     new_product = Product(
@@ -658,7 +661,8 @@ async def get_new_distributor_orders(
         ).first()
         order_data = {
             **order.__dict__,
-            'wholesaler_name': wholesaler.full_name if wholesaler else None
+            'wholesaler_name': wholesaler.full_name if wholesaler else None,
+            'distributor_name': current_user.full_name
         }
         order_responses.append(OrderResponse(**order_data))
     
@@ -735,10 +739,11 @@ async def get_distributor_order_details(
         select(User).where(User.id == order.wholesaler_id)
     ).first()
     
-    # Build order response with wholesaler_name
+    # Build order response with wholesaler_name and distributor_name
     order_data = {
         **order.__dict__,
-        'wholesaler_name': wholesaler_profile.full_name if wholesaler_profile else None
+        'wholesaler_name': wholesaler_profile.full_name if wholesaler_profile else None,
+        'distributor_name': current_user.full_name
     }
     order_response = OrderResponse(**order_data)
 
@@ -856,7 +861,18 @@ async def update_distributor_order_status(
         user_agent=request.headers.get("user-agent", "")
     )
     
-    return OrderResponse.model_validate(order)
+    # Fetch wholesaler and distributor names for OrderResponse
+    wholesaler = db.exec(
+        select(User).where(User.id == order.wholesaler_id)
+    ).first()
+    
+    order_data = {
+        **order.__dict__,
+        'wholesaler_name': wholesaler.full_name if wholesaler else None,
+        'distributor_name': current_user.full_name
+    }
+    
+    return OrderResponse(**order_data)
 
 
 @v1_distributor.get(
