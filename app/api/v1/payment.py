@@ -311,26 +311,26 @@ async def nomba_webhook(
     Currently commented out to only print the payload.
     """
     try:
-        # Get signature from header
-        received_signature = request.headers.get("nomba-signature")
-        if not received_signature:
-            print("ERROR: Missing nomba-signature header")
-            raise HTTPException(status_code=400, detail="Missing nomba-signature header")
+        # Get signature from header (Commented out)
+        # received_signature = request.headers.get("nomba-signature")
+        # if not received_signature:
+        #     print("ERROR: Missing nomba-signature header")
+        #     raise HTTPException(status_code=400, detail="Missing nomba-signature header")
 
         # Get raw request body
         body_bytes = await request.body()
 
-        # Compute signature
-        computed_signature = hmac.new(
-            settings.NOMBA_SIGNING_KEY.encode("utf-8"),
-            body_bytes,
-            hashlib.sha256
-        ).hexdigest()
+        # Compute signature (Commented out)
+        # computed_signature = hmac.new(
+        #     settings.NOMBA_SIGNING_KEY.encode("utf-8"),
+        #     body_bytes,
+        #     hashlib.sha256
+        # ).hexdigest()
 
-        # Validate signature
-        if not hmac.compare_digest(computed_signature, received_signature):
-            print("ERROR: Nomba signature mismatch")
-            raise HTTPException(status_code=401, detail="Invalid signature")
+        # Validate signature (Commented out)
+        # if not hmac.compare_digest(computed_signature, received_signature):
+        #     print("ERROR: Nomba signature mismatch")
+        #     raise HTTPException(status_code=401, detail="Invalid signature")
 
         # Parse and print payload
         payload = json.loads(body_bytes)
