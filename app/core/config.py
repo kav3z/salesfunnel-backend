@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     PAYSTACK_API_URL: str = "https://api.paystack.co"
     PAYSTACK_SECRET_KEY: str = "some-secret-key"
     
+    # Nomba
+    NOMBA_SIGNING_KEY: str = "NombaHackathon2026"
+    
     # Database Configuration
     DATABASE_URL: str = "sqlite:///./salesfunnel.db"
     

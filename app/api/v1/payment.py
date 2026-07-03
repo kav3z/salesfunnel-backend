@@ -13,6 +13,8 @@ from decimal import Decimal
 # external imports
 import json
 import httpx
+import hmac
+import hashlib
 from pydantic import BaseModel
 from sqlalchemy import desc
 from sqlmodel import select
@@ -171,7 +173,6 @@ async def initialize_payment(
             detail=f"Payment initialization failed: {str(e)}"
         )
 
-
 @v1_payment.post("/paystack-hook")
 async def paystack_webhook(
     request: Request, 
@@ -297,6 +298,194 @@ async def paystack_webhook(
         return {"status": "error", "message": "Invalid JSON"}
     except Exception as e:
         print(f"ERROR processing webhook: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
+@v1_payment.post("/nomba-hook")
+async def nomba_webhook(
+    request: Request,
+    db: db_dependency,
+    background_tasks: BackgroundTasks
+):
+    """
+    Webhook endpoint that receives Nomba payment events.
+    Currently commented out to only print the payload.
+    """
+    try:
+        # Get signature from header
+        received_signature = request.headers.get("nomba-signature")
+        if not received_signature:
+            print("ERROR: Missing nomba-signature header")
+            raise HTTPException(status_code=400, detail="Missing nomba-signature header")
+
+        # Get raw request body
+        body_bytes = await request.body()
+
+        # Compute signature
+        computed_signature = hmac.new(
+            settings.NOMBA_SIGNING_KEY.encode("utf-8"),
+            body_bytes,
+            hashlib.sha256
+        ).hexdigest()
+
+        # Validate signature
+        if not hmac.compare_digest(computed_signature, received_signature):
+            print("ERROR: Nomba signature mismatch")
+            raise HTTPException(status_code=401, detail="Invalid signature")
+
+        # Parse and print payload
+        payload = json.loads(body_bytes)
+        print("Nomba Webhook Payload:", payload)
+
+        # event_type = payload.get("eventType")
+        # event_data = payload.get("data", {})
+        # 
+        # if event_type != "payment_success":
+        #     print(f"INFO: Ignoring Nomba webhook event type: {event_type}")
+        #     return {"status": "received", "message": f"Event type {event_type} ignored"}
+        # 
+        # # Extract transaction and order info
+        # reference = event_data.get("transactionId") or event_data.get("orderReference")
+        # if not reference:
+        #     print("ERROR: Missing transaction reference in Nomba webhook payload")
+        #     return {"status": "error", "message": "Missing reference"}
+        # 
+        # # Check for duplicate webhook processing
+        # existing_payment = db.exec(
+        #     select(Payment).where(Payment.reference_number == reference)
+        # ).first()
+        # if existing_payment:
+        #     print(f"INFO: Nomba webhook already processed for reference: {reference}")
+        #     return {"status": "received", "message": "Webhook already processed"}
+        # 
+        # # Find the order
+        # last_order = None
+        # wholesaler = None
+        # order_reference = event_data.get("orderReference")
+        # 
+        # if order_reference:
+        #     last_order = db.exec(
+        #         select(Order).where(Order.order_number == order_reference)
+        #     ).first()
+        #     if last_order:
+        #         wholesaler = db.exec(
+        #             select(User).where(User.id == last_order.wholesaler_id)
+        #         ).first()
+        # 
+        # # Fallback to customer email lookup if order not found by reference
+        # if not last_order:
+        #     customer = event_data.get("customer", {})
+        #     email = customer.get("email")
+        #     if email:
+        #         wholesaler = db.exec(select(User).where(User.email == email)).first()
+        #         if wholesaler:
+        #             last_order = db.exec(
+        #                 select(Order)
+        #                 .where(Order.wholesaler_id == wholesaler.id)
+        #                 .order_by(desc(Order.created_at))  # type: ignore
+        #             ).first()
+        # 
+        # if not last_order:
+        #     print("ERROR: Order not found for Nomba webhook")
+        #     return {"status": "error", "message": "Order not found"}
+        # 
+        # if not wholesaler:
+        #     # Fallback to get wholesaler from order
+        #     wholesaler = db.exec(
+        #         select(User).where(User.id == last_order.wholesaler_id)
+        #     ).first()
+        # 
+        # # Parse amount
+        # amount_raw = event_data.get("amount")
+        # try:
+        #     real_amount = float(amount_raw)
+        # except (ValueError, TypeError):
+        #     real_amount = float(last_order.total_amount)
+        # 
+        # amount_decimal = Decimal(str(real_amount))
+        # 
+        # # Update order status if not already paid
+        # if last_order.status != OrderStatus.PAID:
+        #     last_order.status = OrderStatus.PAID
+        #     last_order.paid_at = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
+        #     db.add(last_order)
+        #     db.commit()
+        # 
+        #     # Reduce stock for each product in the order
+        #     order_items = db.exec(
+        #         select(OrderItem).where(OrderItem.order_id == last_order.id)
+        #     ).all()
+        # 
+        #     for order_item in order_items:
+        #         product = db.exec(
+        #             select(Product).where(Product.id == order_item.product_id)
+        #         ).first()
+        #         if product:
+        #             product.stock_quantity -= order_item.quantity
+        #             db.add(product)
+        # 
+        #     db.commit()
+        # 
+        # # Create payment record
+        # channel = event_data.get("paymentMethod") or event_data.get("channel") or "nomba"
+        # 
+        # # Get timestamp
+        # timestamp_str = request.headers.get("nomba-timestamp") or payload.get("timestamp")
+        # initiated_at = datetime.utcnow()
+        # if timestamp_str:
+        #     try:
+        #         clean_timestamp = timestamp_str.replace('Z', '+00:00')
+        #         initiated_dt = datetime.fromisoformat(clean_timestamp)
+        #         if initiated_dt.tzinfo is not None:
+        #             initiated_at = initiated_dt.astimezone(pytz.utc).replace(tzinfo=None)
+        #         else:
+        #             initiated_at = initiated_dt
+        #     except Exception:
+        #         pass
+        # 
+        # new_payment = Payment(
+        #     order_id=last_order.id,
+        #     distributor_id=last_order.distributor_id,
+        #     reference_number=reference,
+        #     amount=amount_decimal,
+        #     payment_method=channel,
+        #     status=PaymentStatus.VERIFIED,
+        #     order_number=last_order.order_number,
+        #     wholesaler_name=wholesaler.full_name if wholesaler else "Unknown Wholesaler",
+        #     initiated_at=initiated_at
+        # )
+        # db.add(new_payment)
+        # db.commit()
+        # 
+        # # Log to audit trail
+        # if wholesaler:
+        #     background_tasks.add_task(
+        #         audit_action,
+        #         user_id=wholesaler.id,
+        #         user_email=wholesaler.email,
+        #         action_type="CONFIRM",
+        #         entity_type="Payment",
+        #         entity_id=str(last_order.id),
+        #         old_value={"status": "PENDING"},
+        #         new_value={
+        #             "status": "PAID",
+        #             "order_number": last_order.order_number,
+        #             "amount": str(real_amount),
+        #             "reference": reference,
+        #             "channel": channel
+        #         },
+        #         ip_address=request.client.host if request.client else "",
+        #         user_agent=request.headers.get("user-agent", "")
+        #     )
+        
+        return {"status": "received", "message": "Webhook payload received"}
+
+    except json.JSONDecodeError:
+        print("ERROR: Invalid JSON received from Nomba")
+        return {"status": "error", "message": "Invalid JSON"}
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        print(f"ERROR processing Nomba webhook: {str(e)}")
         return {"status": "error", "message": str(e)}
 
 @v1_payment.post("/bank-list")
