@@ -44,7 +44,13 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
     return current_user
 
 
-@v1_admin.get("/users", response_model=AdminUserListResponse, status_code=status.HTTP_200_OK)
+@v1_admin.get(
+    "/users", 
+    response_model=AdminUserListResponse, 
+    status_code=status.HTTP_200_OK,
+    summary="View All Users",
+    description="Retrieve a paginated list of all wholesalers and distributors with optional role and activity filters."
+)
 async def get_all_users(
     db: db_dependency,
     current_user: User = Depends(require_admin),
@@ -147,7 +153,13 @@ async def get_all_users(
     )
 
 
-@v1_admin.get("/orders", response_model=AdminOrderListResponse, status_code=status.HTTP_200_OK)
+@v1_admin.get(
+    "/orders", 
+    response_model=AdminOrderListResponse, 
+    status_code=status.HTTP_200_OK,
+    summary="View All Orders",
+    description="Retrieve a paginated list of all orders across the platform with payment status details."
+)
 async def get_all_orders(
     db: db_dependency,
     current_user: User = Depends(require_admin),
@@ -158,17 +170,6 @@ async def get_all_orders(
 ):
     """
     View all orders and their payment statuses.
-    
-    Admin only endpoint.
-    
-    Args:
-        page: Page number for pagination
-        page_size: Number of items per page
-        status_filter: Optional filter by order status
-        payment_status_filter: Optional filter by payment status
-    
-    Returns:
-        AdminOrderListResponse: Paginated list of orders with payment info
     """
     # Build query
     query = select(Order)
@@ -240,7 +241,13 @@ async def get_all_orders(
     )
 
 
-@v1_admin.post("/orders/{order_id}/override-status", response_model=AdminOrderResponse, status_code=status.HTTP_200_OK)
+@v1_admin.post(
+    "/orders/{order_id}/override-status", 
+    response_model=AdminOrderResponse, 
+    status_code=status.HTTP_200_OK,
+    summary="Override Order Status",
+    description="Manually override order status for administrative dispute resolution."
+)
 async def override_order_status(
     order_id: UUID,
     override_data: OrderStatusOverride,
@@ -249,18 +256,6 @@ async def override_order_status(
 ):
     """
     Manually override order status for dispute resolution.
-    
-    Admin only endpoint. Requires a reason for the override.
-    
-    Args:
-        order_id: UUID of the order
-        override_data: New status and reason for override
-    
-    Returns:
-        AdminOrderResponse: Updated order details
-        
-    Raises:
-        HTTPException 404: If order not found
     """
     # Find the order
     order = db.exec(
@@ -325,7 +320,13 @@ async def override_order_status(
     )
 
 
-@v1_admin.put("/users/{user_id}/block", response_model=AdminUserResponse, status_code=status.HTTP_200_OK)
+@v1_admin.put(
+    "/users/{user_id}/block", 
+    response_model=AdminUserResponse, 
+    status_code=status.HTTP_200_OK,
+    summary="Block User Account",
+    description="Deactivate a user account, disabling authentication and access."
+)
 async def block_user(
     user_id: UUID,
     db: db_dependency,
@@ -333,18 +334,6 @@ async def block_user(
 ):
     """
     Block a user account.
-    
-    Admin only endpoint. Sets user's is_active to False.
-    
-    Args:
-        user_id: UUID of the user to block
-    
-    Returns:
-        AdminUserResponse: Updated user details
-        
-    Raises:
-        HTTPException 404: If user not found
-        HTTPException 400: If trying to block an admin or already blocked
     """
     # Find the user
     user = db.exec(
@@ -412,7 +401,13 @@ async def block_user(
     )
 
 
-@v1_admin.put("/users/{user_id}/unblock", response_model=AdminUserResponse, status_code=status.HTTP_200_OK)
+@v1_admin.put(
+    "/users/{user_id}/unblock", 
+    response_model=AdminUserResponse, 
+    status_code=status.HTTP_200_OK,
+    summary="Unblock User Account",
+    description="Re-activate a blocked user account."
+)
 async def unblock_user(
     user_id: UUID,
     db: db_dependency,
@@ -420,18 +415,6 @@ async def unblock_user(
 ):
     """
     Unblock a user account.
-    
-    Admin only endpoint. Sets user's is_active to True.
-    
-    Args:
-        user_id: UUID of the user to unblock
-    
-    Returns:
-        AdminUserResponse: Updated user details
-        
-    Raises:
-        HTTPException 404: If user not found
-        HTTPException 400: If user is not blocked
     """
     # Find the user
     user = db.exec(
@@ -492,7 +475,13 @@ async def unblock_user(
     )
 
 
-@v1_admin.put("/users/{user_id}/verify", response_model=AdminUserResponse, status_code=status.HTTP_200_OK)
+@v1_admin.put(
+    "/users/{user_id}/verify", 
+    response_model=AdminUserResponse, 
+    status_code=status.HTTP_200_OK,
+    summary="Verify User Profile",
+    description="Mark a wholesaler or distributor business profile as verified."
+)
 async def verify_user(
     user_id: UUID,
     db: db_dependency,
@@ -500,8 +489,6 @@ async def verify_user(
 ):
     """
     Verify a user's business profile (Wholesaler or Distributor).
-    
-    Admin only endpoint. Sets is_verified to True on the profile.
     """
     # Find the user
     user = db.exec(
@@ -572,7 +559,13 @@ async def verify_user(
     )
 
 
-@v1_admin.put("/users/{user_id}/unverify", response_model=AdminUserResponse, status_code=status.HTTP_200_OK)
+@v1_admin.put(
+    "/users/{user_id}/unverify", 
+    response_model=AdminUserResponse, 
+    status_code=status.HTTP_200_OK,
+    summary="Unverify User Profile",
+    description="Revoke verification status for a wholesaler or distributor business profile."
+)
 async def unverify_user(
     user_id: UUID,
     db: db_dependency,

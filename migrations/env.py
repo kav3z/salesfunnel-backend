@@ -20,6 +20,8 @@ from app.models.order import Order
 from app.models.order_item import OrderItem
 from app.models.distributor_profile import DistributorProfile
 from app.models.wholesaler_profile import WholesalerProfile
+from app.models.wallet import Wallet
+from app.models.wallet_transaction import WalletTransaction
 # Add the models that were causing issues:
 # Ensure these import paths are correct for your project structure
 try:

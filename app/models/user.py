@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from .distributor_profile import DistributorProfile
     from .cart import Cart
     from .payment import Payment
+    from .wallet import Wallet
 
 
 class UserRole(str, Enum):
@@ -54,3 +55,9 @@ class User(SQLModel, table=True):
     
     # Payment relationships (for distributors receiving payments)
     payments: list["Payment"] = Relationship(back_populates="distributor")
+
+    # Wallet relationship
+    wallet: Optional["Wallet"] = Relationship(
+        back_populates="user", 
+        sa_relationship_kwargs={"uselist": False, "cascade": "all, delete-orphan"}
+    )

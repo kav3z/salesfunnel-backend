@@ -7,6 +7,7 @@ from app.models.product import Product
 from app.models.order import Order, OrderStatus
 from app.models.order_item import OrderItem
 from app.models.user import User, UserRole
+from app.models.wholesaler_profile import WholesalerProfile
 from app.core.dependencies import DBSession, require_role, CurrentUser
 from app.core.helpers import audit_action
 
@@ -103,6 +104,8 @@ def clear_cart(db: db_dependency, cart: Cart) -> None:
     "/cart/add",
     response_model=CartResponse,
     status_code=status.HTTP_201_CREATED,
+    summary="Add Product to Cart",
+    description="Add a specified product and quantity to the wholesaler's shopping cart.",
     dependencies=[Depends(require_role([UserRole.WHOLESALER]))]
 )
 async def add_to_cart(
@@ -195,6 +198,8 @@ async def add_to_cart(
     "/cart/update",
     response_model=CartResponse,
     status_code=status.HTTP_200_OK,
+    summary="Update Cart Item Quantity",
+    description="Update the quantity of an existing product in the wholesaler's cart.",
     dependencies=[Depends(require_role([UserRole.WHOLESALER]))]
 )
 async def update_cart_item(
@@ -278,6 +283,8 @@ async def update_cart_item(
     "/cart/remove",
     response_model=CartResponse,
     status_code=status.HTTP_200_OK,
+    summary="Remove Item from Cart",
+    description="Remove a specific product from the wholesaler's cart.",
     dependencies=[Depends(require_role([UserRole.WHOLESALER]))]
 )
 async def remove_from_cart(
@@ -330,6 +337,8 @@ async def remove_from_cart(
     "/cart",
     response_model=CartResponse,
     status_code=status.HTTP_200_OK,
+    summary="Get Shopping Cart",
+    description="Retrieve all items currently in the logged-in wholesaler's shopping cart.",
     dependencies=[Depends(require_role([UserRole.WHOLESALER]))]
 )
 async def get_cart(
@@ -348,7 +357,9 @@ async def get_cart(
 
 @v1_wholesaler.post(
     "/orders",
-    status_code=status.HTTP_201_CREATED
+    status_code=status.HTTP_201_CREATED,
+    summary="Create Order from Cart",
+    description="Checkout and create new orders for each distributor represented in the active cart."
 )
 async def create_order(
     order_data: OrderCreate,
@@ -362,6 +373,23 @@ async def create_order(
     # Check role inside handler instead of dependency
     if current_user.role != UserRole.WHOLESALER:
         raise HTTPException(status_code=403, detail="Only wholesalers can create orders")
+    
+    # Retrieve wholesaler profile and check document submission & verification status
+    wholesaler_profile = db.exec(
+        select(WholesalerProfile).where(WholesalerProfile.user_id == current_user.id)
+    ).first()
+
+    if not wholesaler_profile or not wholesaler_profile.has_submitted_documents:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You must submit verification documents before placing an order"
+        )
+
+    if not wholesaler_profile.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your wholesaler profile must be verified by an administrator before placing an order"
+        )
     
     # Get cart
     cart = db.exec(
@@ -438,7 +466,8 @@ async def create_order(
             delivery_address=order_data.delivery_address,
             is_delivery=order_data.is_delivery,
             contact_name=order_data.contact_name,
-            contact_phone_no=order_data.contact_phone_no
+            contact_phone_no=order_data.contact_phone_no,
+            mode_of_transport=order_data.mode_of_transport
         )
         db.add(order)
         db.commit()
@@ -488,6 +517,8 @@ async def create_order(
     "/orders",
     response_model=OrderListResponse,
     status_code=status.HTTP_200_OK,
+    summary="List Wholesaler Orders",
+    description="Retrieve a paginated list of all orders placed by the logged-in wholesaler.",
     dependencies=[Depends(require_role([UserRole.WHOLESALER]))]
 )
 async def get_wholesaler_orders(
@@ -539,7 +570,8 @@ async def get_wholesaler_orders(
                 approved_at=o.approved_at,
                 ready_at=o.ready_at,
                 completed_at=o.completed_at,
-                cancelled_at=o.cancelled_at
+                cancelled_at=o.cancelled_at,
+                mode_of_transport=o.mode_of_transport
             )
             for o in orders
         ],
@@ -554,6 +586,8 @@ async def get_wholesaler_orders(
     "/orders/{order_id}",
     response_model=OrderDetailResponse,
     status_code=status.HTTP_200_OK,
+    summary="Get Order Details",
+    description="Retrieve full breakdown and line items for a specific wholesaler order.",
     dependencies=[Depends(require_role([UserRole.WHOLESALER]))]
 )
 async def get_wholesaler_order_details(
@@ -617,6 +651,7 @@ async def get_wholesaler_order_details(
         ready_at=order.ready_at,
         completed_at=order.completed_at,
         cancelled_at=order.cancelled_at,
+        mode_of_transport=order.mode_of_transport,
         items=items_response,
         wholesaler_name=current_user.full_name
     )
@@ -625,6 +660,8 @@ async def get_wholesaler_order_details(
 @v1_wholesaler.delete(
     "/cart",
     status_code=status.HTTP_204_NO_CONTENT,
+    summary="Clear Shopping Cart",
+    description="Delete all items and empty the wholesaler's cart.",
     dependencies=[Depends(require_role([UserRole.WHOLESALER]))]
 )
 async def delete_cart(
@@ -659,6 +696,8 @@ async def delete_cart(
     "/dashboard",
     response_model=WholesalerDashboardResponse,
     status_code=status.HTTP_200_OK,
+    summary="Get Wholesaler Dashboard Stats",
+    description="Retrieve statistics including in-progress orders, pending payments, and monthly spending.",
     dependencies=[Depends(require_role([UserRole.WHOLESALER]))]
 )
 async def get_wholesaler_dashboard(
@@ -790,3 +829,173 @@ async def delete_pending_order(
     )
     
     return {"message": "Order deleted successfully", "order_id": str(order_id)}
+
+
+@v1_wholesaler.get(
+    "/orders/search",
+    response_model=OrderListResponse,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_role([UserRole.WHOLESALER]))]
+)
+async def search_wholesaler_orders(
+    db: db_dependency,
+    current_user: CurrentUser,
+    query: Optional[str] = Query(default=None, description="Search by order number, distributor name, or product name"),
+    status_filter: Optional[OrderStatus] = Query(default=None, description="Filter by order status"),
+    start_date: Optional[datetime] = Query(default=None, description="Filter from created date"),
+    end_date: Optional[datetime] = Query(default=None, description="Filter to created date"),
+    page: int = Query(default=1, ge=1, description="Page number"),
+    page_size: int = Query(default=10, ge=1, le=100, description="Items per page")
+):
+    """
+    Search and filter orders placed by the wholesaler.
+    """
+    # Base query filters orders to only those placed by the logged-in wholesaler
+    stmt = select(Order).where(Order.wholesaler_id == current_user.id)
+    
+    # 1. Apply status filter
+    if status_filter:
+        stmt = stmt.where(Order.status == status_filter)
+        
+    # 2. Apply date range filters
+    if start_date:
+        stmt = stmt.where(Order.created_at >= start_date)
+    if end_date:
+        stmt = stmt.where(Order.created_at <= end_date)
+        
+    # 3. Apply search query matching order number, distributor name, or product names
+    if query:
+        order_num_like = f"%{query}%"
+        
+        # Subquery for orders containing products matching query
+        product_stmt = select(OrderItem.order_id).join(Product).where(Product.name.ilike(f"%{query}%"))
+        
+        # Subquery for orders from distributors whose name matches query
+        distributor_stmt = select(User.id).where(User.role == UserRole.DISTRIBUTOR, User.full_name.ilike(f"%{query}%"))
+        
+        stmt = stmt.where(
+            (Order.order_number.ilike(order_num_like)) |
+            (Order.id.in_(product_stmt)) |
+            (Order.distributor_id.in_(distributor_stmt))
+        )
+
+    # Calculate total count of matching records
+    count_stmt = select(func.count()).select_from(stmt.alias())
+    total = db.exec(count_stmt).one()
+    
+    # Apply pagination and sorting
+    total_pages = ceil(total / page_size) if total > 0 else 1
+    offset = (page - 1) * page_size
+    stmt = stmt.order_by(Order.created_at.desc()).offset(offset).limit(page_size) # type: ignore
+    
+    orders = db.exec(stmt).all()
+    
+    # Map to schemas
+    orders_response = []
+    for o in orders:
+        dist_user = db.exec(select(User).where(User.id == o.distributor_id)).first()
+        dist_name = dist_user.full_name if dist_user else "Unknown Distributor"
+        
+        orders_response.append(
+            OrderResponse(
+                id=o.id,
+                order_number=o.order_number,
+                wholesaler_id=o.wholesaler_id,
+                wholesaler_name=current_user.full_name,
+                distributor_name=dist_name,
+                total_amount=o.total_amount,
+                status=o.status,
+                notes=o.notes,
+                created_at=o.created_at,
+                paid_at=o.paid_at,
+                approved_at=o.approved_at,
+                ready_at=o.ready_at,
+                completed_at=o.completed_at,
+                updated_at=o.updated_at
+            )
+        )
+        
+    return OrderListResponse(
+        orders=orders_response,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages
+    )
+
+
+@v1_wholesaler.get(
+    "/orders/{order_id}/calculate-transport",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_role([UserRole.WHOLESALER, UserRole.DISTRIBUTOR, UserRole.ADMIN]))]
+)
+async def calculate_order_transport(
+    order_id: UUID,
+    db: db_dependency,
+    current_user: CurrentUser
+):
+    """
+    Calculate the best transport mode for an order based on total weight and volume.
+    """
+    # Fetch order
+    order = db.exec(select(Order).where(Order.id == order_id)).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+        
+    # Security check: check ownership if wholesaler or distributor
+    if current_user.role == UserRole.WHOLESALER and order.wholesaler_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this order transport details")
+    if current_user.role == UserRole.DISTRIBUTOR and order.distributor_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this order transport details")
+
+    # Load order items preloaded with products
+    from sqlalchemy.orm import joinedload
+    items_stmt = select(OrderItem).where(OrderItem.order_id == order_id).options(joinedload(OrderItem.product))
+    items = db.exec(items_stmt).all()
+
+    total_weight_g = 0
+    total_volume_cm3 = 0.0
+
+    for item in items:
+        # Fallback values if product has no weight or dimensions
+        p_weight = item.product.weight if item.product.weight is not None else 500  # Default 500g
+        
+        p_dims = item.product.dimensions
+        if p_dims and isinstance(p_dims, dict) and all(k in p_dims for k in ('length', 'width', 'height')):
+            p_volume = float(p_dims['length']) * float(p_dims['width']) * float(p_dims['height'])
+        else:
+            p_volume = 3000.0  # Default 3000 cm3 (20x15x10)
+            
+        total_weight_g += p_weight * item.quantity
+        total_volume_cm3 += p_volume * item.quantity
+
+    # Determine optimal transport mode
+    # Thresholds:
+    # 1. Motorcycle: max 15kg (15,000g), max 30,000 cm3
+    # 2. Car: max 300kg (300,000g), max 1,000,000 cm3
+    # 3. Delivery Van: max 1,500kg (1,500,000g), max 5,000,000 cm3
+    # 4. Truck: max 10,000kg (10,000,000g), max 30,000,000 cm3
+
+    if total_weight_g <= 15000 and total_volume_cm3 <= 30000:
+        transport_mode = "Motorcycle"
+    elif total_weight_g <= 300000 and total_volume_cm3 <= 1000000:
+        transport_mode = "Car"
+    elif total_weight_g <= 1500000 and total_volume_cm3 <= 5000000:
+        transport_mode = "Delivery Van"
+    elif total_weight_g <= 10000000 and total_volume_cm3 <= 30000000:
+        transport_mode = "Truck"
+    else:
+        # Exceeds single truck, calculate how many trucks needed
+        import math
+        weight_trucks = math.ceil(total_weight_g / 10000000)
+        volume_trucks = math.ceil(total_volume_cm3 / 30000000)
+        num_trucks = max(weight_trucks, volume_trucks)
+        transport_mode = f"{num_trucks} Trucks"
+
+    return {
+        "order_id": str(order_id),
+        "order_number": order.order_number,
+        "total_weight_g": total_weight_g,
+        "total_volume_cm3": round(total_volume_cm3, 2),
+        "suggested_transport_mode": transport_mode
+    }

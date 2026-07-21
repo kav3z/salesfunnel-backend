@@ -4,18 +4,22 @@ from app.core.helpers import audit_action
 from app.core.dependencies import CurrentUser, DBSession
 from app.models.order import Order, OrderStatus
 from app.models.distributor_profile import DistributorProfile
-from app.models.user import User
+from app.models.wholesaler_profile import WholesalerProfile
+from app.models.user import User, UserRole
 from app.models.order_item import OrderItem
 from app.models.product import Product
 from app.models.payment import Payment, PaymentStatus
+from app.models.wallet import Wallet
+from app.models.wallet_transaction import WalletTransaction, TransactionStatus, TransactionType, TransactionPurpose
 from decimal import Decimal
+import uuid
 
 # external imports
 import json
 import httpx
 import hmac
 import hashlib
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import desc
 from sqlmodel import select
 from fastapi import APIRouter, HTTPException, Request, BackgroundTasks
@@ -25,7 +29,6 @@ import pytz
 v1_payment = APIRouter(prefix="/v1/payment", tags=["v1_payment"])
 db_dependency = DBSession
 
-PAYSTACK_API_URL: str = "https://api.paystack.co"
 PAYSTACK_SECRET_KEY = settings.PAYSTACK_SECRET_KEY
 
 # Response Schema
@@ -34,7 +37,26 @@ class InitializePaymentResponse(BaseModel):
     message: str
     data: dict | None = None
 
-@v1_payment.post("/initialize", response_model=InitializePaymentResponse)
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "status": "success",
+                "message": "Payment initialization successful",
+                "data": {
+                    "authorization_url": "https://checkout.paystack.com/001122334455",
+                    "access_code": "001122334455",
+                    "reference": "PAY-REF-998822"
+                }
+            }
+        }
+    )
+
+@v1_payment.post(
+    "/initialize", 
+    response_model=InitializePaymentResponse,
+    summary="Initialize Paystack Payment Checkout",
+    description="Initialize a Paystack payment session for the logged-in wholesaler's latest order."
+)
 async def initialize_payment( 
     current_user: CurrentUser,
     db: db_dependency,
@@ -101,8 +123,7 @@ async def initialize_payment(
     # Prepare Paystack request payload
     payload = {
         "email": email,
-        "amount": paystack_amount,
-        "subaccount": subaccount_code
+        "amount": paystack_amount
     }
     
     # Prepare headers
@@ -181,311 +202,309 @@ async def paystack_webhook(
 ):
     """
     Simple webhook endpoint that receives Paystack payment events
-    and prints the data to console.
-    
-    Paystack will send POST requests to this endpoint for payment events:
-    - charge.success
-    - charge.failed
-    - transfer.success
-    - transfer.failed
-    - etc.
+    and processes them accordingly.
     """
     try:
         # Get the raw data from Paystack
         body = await request.body()
-        data = json.loads(body)        
-
-        # gets the wholesaler email and from the webhook payload
-        customer = data.get('data', {}).get('customer', {})
-        email = customer.get('email')
-
-        # gets additional data from webhook payload
+        data = json.loads(body)      
+        print(data)  
+        event = data.get("event")
         event_data = data.get('data', {})
 
-        reference = event_data.get("reference", {})
-        amount = int(event_data.get("amount"))
-        real_amount = amount/100
-        payment_date = event_data.get("paid_at", {})
-        channel = event_data.get("channel", {})
+        if event == "charge.success":
+            # gets the wholesaler email and from the webhook payload
+            customer = event_data.get('customer', {})
+            email = customer.get('email')
 
-        
-        # gets the user by email first
-        wholesaler = db.exec(select(User).where(User.email == email)).first()
-        
-        if not wholesaler:
-            return {"status": "error", "message": "User not found"}
-        
-        # gets the last order made by the wholesaler
-        last_order = db.exec(
-            select(Order)
-            .where(Order.wholesaler_id == wholesaler.id)
-            .order_by(desc(Order.created_at))  # type: ignore
-        ).first()
+            reference = event_data.get("reference", {})
+            amount = int(event_data.get("amount"))
+            real_amount = amount/100
+            payment_date = event_data.get("paid_at", {})
+            channel = event_data.get("channel", {})
+            metadata = event_data.get("metadata") or {}
 
-        # Check if order exists BEFORE making changes
-        if not last_order:
-            return {"status": "error", "message": "No order found for this customer"}
+            # Check if this is a wallet funding charge or dedicated virtual account deposit
+            authorization = event_data.get("authorization") or {}
+            is_dva_deposit = (
+                channel in ["dedicated_nul", "dedicated_account"] 
+                or authorization.get("channel") in ["dedicated_nul", "dedicated_account"]
+            )
 
-        # changes the status of the order made by the wholesaler to paid
-        last_order.status = OrderStatus.PAID
-        db.add(last_order)
-        db.commit()
+            if metadata.get("type") == "wallet_funding" or is_dva_deposit:
+                wholesaler_id = metadata.get("wholesaler_id")
+                
+                # Fetch transaction if already created (pre-initialized funding)
+                tx = db.exec(select(WalletTransaction).where(WalletTransaction.reference == reference)).first()
+                if tx:
+                    if tx.status == TransactionStatus.PENDING:
+                        tx.status = TransactionStatus.COMPLETED
+                        db.add(tx)
+                        
+                        # Update wholesaler's wallet
+                        wallet = db.exec(select(Wallet).where(Wallet.id == tx.wallet_id)).first()
+                        if wallet:
+                            wallet.balance += Decimal(str(real_amount))
+                            db.add(wallet)
+                            
+                        db.commit()
+                        
+                        background_tasks.add_task(
+                            audit_action,
+                            user_id=uuid.UUID(wholesaler_id) if wholesaler_id else None,
+                            user_email=email,
+                            action_type="CONFIRM_FUNDING",
+                            entity_type="WalletTransaction",
+                            entity_id=str(tx.id),
+                            old_value={"status": "PENDING"},
+                            new_value={
+                                "status": "COMPLETED",
+                                "amount": str(real_amount),
+                                "reference": reference
+                            },
+                            ip_address=request.client.host if request.client else "",
+                            user_agent=request.headers.get("user-agent", "")
+                        )
+                    return {"status": "received", "message": "Wallet funding charge.success processed"}
 
-        # gets all order items belonging to the last order
-        order_items = db.exec(
-            select(OrderItem)
-            .where(OrderItem.order_id == last_order.id)
-        ).all()
+                # If no existing pending transaction, handle direct DVA deposit
+                wholesaler = db.exec(select(User).where(User.email == email)).first()
+                if wholesaler and wholesaler.role == UserRole.WHOLESALER:
+                    wallet = db.exec(select(Wallet).where(Wallet.user_id == wholesaler.id)).first()
+                    if not wallet:
+                        wallet = Wallet(user_id=wholesaler.id, balance=Decimal("0.00"))
+                        db.add(wallet)
+                        db.commit()
 
-        # Reduce stock for each product in the order
-        for order_item in order_items:
-            product = db.exec(
-                select(Product)
-                .where(Product.id == order_item.product_id)
+                    wallet.balance += Decimal(str(real_amount))
+                    db.add(wallet)
+
+                    new_tx = WalletTransaction(
+                        wallet_id=wallet.id,
+                        amount=Decimal(str(real_amount)),
+                        type=TransactionType.CREDIT,
+                        purpose=TransactionPurpose.FUNDING,
+                        status=TransactionStatus.COMPLETED,
+                        reference=reference,
+                        description="Dedicated virtual account transfer deposit"
+                    )
+                    db.add(new_tx)
+                    db.commit()
+
+                    background_tasks.add_task(
+                        audit_action,
+                        user_id=wholesaler.id,
+                        user_email=wholesaler.email,
+                        action_type="CONFIRM_DVA_FUNDING",
+                        entity_type="WalletTransaction",
+                        entity_id=str(new_tx.id),
+                        old_value=None,
+                        new_value={
+                            "status": "COMPLETED",
+                            "amount": str(real_amount),
+                            "reference": reference,
+                            "channel": channel
+                        },
+                        ip_address=request.client.host if request.client else "",
+                        user_agent=request.headers.get("user-agent", "")
+                    )
+                    return {"status": "received", "message": "Dedicated virtual account deposit processed successfully"}
+
+            # Otherwise, it's standard order payment
+            wholesaler = db.exec(select(User).where(User.email == email)).first()
+            if not wholesaler:
+                return {"status": "error", "message": "User not found"}
+            
+            # gets the last order made by the wholesaler
+            last_order = db.exec(
+                select(Order)
+                .where(Order.wholesaler_id == wholesaler.id)
+                .order_by(desc(Order.created_at))  # type: ignore
             ).first()
 
-            if product:
-                product.stock_quantity -= order_item.quantity
-                db.add(product)
+            # Check if order exists BEFORE making changes
+            if not last_order:
+                return {"status": "error", "message": "No order found for this customer"}
 
-        db.commit()
+            # changes the status of the order made by the wholesaler to paid
+            last_order.status = OrderStatus.PAID
+            last_order.paid_at = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
+            db.add(last_order)
+            db.commit()
 
-        # preparing part of the payment data
-        new_payment_data = {
-            "order_number": last_order.order_number,
-            "wholesaler_name": wholesaler.full_name,
-            "amount": Decimal(str(real_amount)),
-            "reference_number": reference,
-            "status": PaymentStatus.PENDING, 
-            "distributor_id": last_order.distributor_id
-        }
+            # gets all order items belonging to the last order
+            order_items = db.exec(
+                select(OrderItem)
+                .where(OrderItem.order_id == last_order.id)
+            ).all()
 
-        # creating a payment row in the db
-        new_payment = Payment(
-            **new_payment_data,
-            order_id=last_order.id,
-            payment_method=channel,
-            initiated_at=datetime.fromisoformat(payment_date.replace('Z', '+00:00'))
-            )
-        db.add(new_payment)
-        db.commit()
-        
-        # Log to audit trail
-        background_tasks.add_task(
-            audit_action,
-            user_id=wholesaler.id,
-            user_email=wholesaler.email,
-            action_type="CONFIRM",
-            entity_type="Payment",
-            entity_id=str(last_order.id),
-            old_value={"status": "PENDING"},
-            new_value={
-                "status": "PAID",
+            # Reduce stock for each product in the order
+            for order_item in order_items:
+                product = db.exec(
+                    select(Product)
+                    .where(Product.id == order_item.product_id)
+                ).first()
+
+                if product:
+                    product.stock_quantity -= order_item.quantity
+                    db.add(product)
+
+            db.commit()
+
+            # preparing part of the payment data
+            new_payment_data = {
                 "order_number": last_order.order_number,
-                "amount": str(real_amount),
-                "reference": reference,
-                "channel": channel
-            },
-            ip_address=request.client.host if request.client else "",
-            user_agent=request.headers.get("user-agent", "")
-        )
-        
-        # Return success response to Paystack
-        return {"status": "received", "message": "Webhook data received successfully"}
+                "wholesaler_name": wholesaler.full_name,
+                "amount": Decimal(str(real_amount)),
+                "reference_number": reference,
+                "status": PaymentStatus.COMPLETED, 
+                "distributor_id": last_order.distributor_id
+            }
+
+            # creating a payment row in the db
+            new_payment = Payment(
+                **new_payment_data,
+                order_id=last_order.id,
+                payment_method=channel,
+                initiated_at=datetime.fromisoformat(payment_date.replace('Z', '+00:00'))
+                )
+            db.add(new_payment)
+            db.commit()
+            
+            # Log to audit trail
+            background_tasks.add_task(
+                audit_action,
+                user_id=wholesaler.id,
+                user_email=wholesaler.email,
+                action_type="CONFIRM",
+                entity_type="Payment",
+                entity_id=str(last_order.id),
+                old_value={"status": "PENDING"},
+                new_value={
+                    "status": "PAID",
+                    "order_number": last_order.order_number,
+                    "amount": str(real_amount),
+                    "reference": reference,
+                    "channel": channel
+                },
+                ip_address=request.client.host if request.client else "",
+                user_agent=request.headers.get("user-agent", "")
+            )
+            return {"status": "received", "message": "Order payment charge.success processed"}
+
+        elif event == "transfer.success":
+            transfer_ref = event_data.get("reference")
+            tx = db.exec(select(WalletTransaction).where(WalletTransaction.reference == transfer_ref)).first()
+            if tx and tx.status == TransactionStatus.PENDING:
+                tx.status = TransactionStatus.COMPLETED
+                db.add(tx)
+                
+                wallet = db.exec(select(Wallet).where(Wallet.id == tx.wallet_id)).first()
+                user_id = wallet.user_id if wallet else None
+                user_email = ""
+                if user_id:
+                    user = db.exec(select(User).where(User.id == user_id)).first()
+                    user_email = user.email if user else ""
+                
+                db.commit()
+                
+                background_tasks.add_task(
+                    audit_action,
+                    user_id=user_id,
+                    user_email=user_email,
+                    action_type="CONFIRM_WITHDRAWAL",
+                    entity_type="WalletTransaction",
+                    entity_id=str(tx.id),
+                    old_value={"status": "PENDING"},
+                    new_value={"status": "COMPLETED", "reference": transfer_ref},
+                    ip_address=request.client.host if request.client else "",
+                    user_agent=request.headers.get("user-agent", "")
+                )
+            return {"status": "received", "message": "transfer.success processed"}
+
+        elif event == "transfer.failed":
+            transfer_ref = event_data.get("reference")
+            tx = db.exec(select(WalletTransaction).where(WalletTransaction.reference == transfer_ref)).first()
+            if tx and tx.status == TransactionStatus.PENDING:
+                tx.status = TransactionStatus.FAILED
+                db.add(tx)
+                
+                wallet = db.exec(select(Wallet).where(Wallet.id == tx.wallet_id)).first()
+                user_id = None
+                user_email = ""
+                if wallet:
+                    wallet.balance += tx.amount
+                    db.add(wallet)
+                    user_id = wallet.user_id
+                    user = db.exec(select(User).where(User.id == user_id)).first()
+                    user_email = user.email if user else ""
+                
+                db.commit()
+                
+                background_tasks.add_task(
+                    audit_action,
+                    user_id=user_id,
+                    user_email=user_email,
+                    action_type="FAIL_WITHDRAWAL",
+                    entity_type="WalletTransaction",
+                    entity_id=str(tx.id),
+                    old_value={"status": "PENDING"},
+                    new_value={"status": "FAILED", "reference": transfer_ref, "message": "Funds reverted due to transfer failure"},
+                    ip_address=request.client.host if request.client else "",
+                    user_agent=request.headers.get("user-agent", "")
+                )
+            return {"status": "received", "message": "transfer.failed processed"}
+
+        elif event == "dedicatedaccount.assign.success":
+            customer = event_data.get("customer", {})
+            email = customer.get("email")
+
+            dedicated_account = event_data.get("dedicated_account", {})
+            virtual_account_id = dedicated_account.get("id") or dedicated_account.get("dedicated_account_id")
+
+            if not email or not virtual_account_id:
+                return {"status": "error", "message": "Missing customer email or virtual account ID in payload"}
+
+            user = db.exec(select(User).where(User.email == email)).first()
+            if not user:
+                return {"status": "error", "message": "User not found for dedicated account assignment"}
+
+            if user.role != UserRole.WHOLESALER:
+                return {"status": "error", "message": "Only wholesalers can have dedicated virtual accounts"}
+
+            wholesaler_profile = db.exec(
+                select(WholesalerProfile).where(WholesalerProfile.user_id == user.id)
+            ).first()
+
+            if not wholesaler_profile:
+                return {"status": "error", "message": "Wholesaler profile not found"}
+
+            wholesaler_profile.paystack_dedicated_account_id = str(virtual_account_id)
+            db.add(wholesaler_profile)
+            db.commit()
+
+            background_tasks.add_task(
+                audit_action,
+                user_id=user.id,
+                user_email=email,
+                action_type="ASSIGN_DEDICATED_ACCOUNT",
+                entity_type="WholesalerProfile",
+                entity_id=str(wholesaler_profile.id),
+                old_value=None,
+                new_value={"paystack_dedicated_account_id": str(virtual_account_id)},
+                ip_address=request.client.host if request.client else "",
+                user_agent=request.headers.get("user-agent", "")
+            )
+
+            return {"status": "received", "message": "dedicatedaccount.assign.success processed"}
+
+        return {"status": "received", "message": f"Webhook event '{event}' ignored"}
         
     except json.JSONDecodeError:
         print("ERROR: Invalid JSON received from Paystack")
         return {"status": "error", "message": "Invalid JSON"}
     except Exception as e:
         print(f"ERROR processing webhook: {str(e)}")
-        return {"status": "error", "message": str(e)}
-
-@v1_payment.post("/nomba-hook")
-async def nomba_webhook(
-    request: Request,
-    db: db_dependency,
-    background_tasks: BackgroundTasks
-):
-    """
-    Webhook endpoint that receives Nomba payment events.
-    Currently commented out to only print the payload.
-    """
-    try:
-        # Get signature from header (Commented out)
-        # received_signature = request.headers.get("nomba-signature")
-        # if not received_signature:
-        #     print("ERROR: Missing nomba-signature header")
-        #     raise HTTPException(status_code=400, detail="Missing nomba-signature header")
-
-        # Get raw request body
-        body_bytes = await request.body()
-
-        # Compute signature (Commented out)
-        # computed_signature = hmac.new(
-        #     settings.NOMBA_SIGNING_KEY.encode("utf-8"),
-        #     body_bytes,
-        #     hashlib.sha256
-        # ).hexdigest()
-
-        # Validate signature (Commented out)
-        # if not hmac.compare_digest(computed_signature, received_signature):
-        #     print("ERROR: Nomba signature mismatch")
-        #     raise HTTPException(status_code=401, detail="Invalid signature")
-
-        # Parse and print payload
-        payload = json.loads(body_bytes)
-        print("Nomba Webhook Payload:", payload)
-
-        # event_type = payload.get("eventType")
-        # event_data = payload.get("data", {})
-        # 
-        # if event_type != "payment_success":
-        #     print(f"INFO: Ignoring Nomba webhook event type: {event_type}")
-        #     return {"status": "received", "message": f"Event type {event_type} ignored"}
-        # 
-        # # Extract transaction and order info
-        # reference = event_data.get("transactionId") or event_data.get("orderReference")
-        # if not reference:
-        #     print("ERROR: Missing transaction reference in Nomba webhook payload")
-        #     return {"status": "error", "message": "Missing reference"}
-        # 
-        # # Check for duplicate webhook processing
-        # existing_payment = db.exec(
-        #     select(Payment).where(Payment.reference_number == reference)
-        # ).first()
-        # if existing_payment:
-        #     print(f"INFO: Nomba webhook already processed for reference: {reference}")
-        #     return {"status": "received", "message": "Webhook already processed"}
-        # 
-        # # Find the order
-        # last_order = None
-        # wholesaler = None
-        # order_reference = event_data.get("orderReference")
-        # 
-        # if order_reference:
-        #     last_order = db.exec(
-        #         select(Order).where(Order.order_number == order_reference)
-        #     ).first()
-        #     if last_order:
-        #         wholesaler = db.exec(
-        #             select(User).where(User.id == last_order.wholesaler_id)
-        #         ).first()
-        # 
-        # # Fallback to customer email lookup if order not found by reference
-        # if not last_order:
-        #     customer = event_data.get("customer", {})
-        #     email = customer.get("email")
-        #     if email:
-        #         wholesaler = db.exec(select(User).where(User.email == email)).first()
-        #         if wholesaler:
-        #             last_order = db.exec(
-        #                 select(Order)
-        #                 .where(Order.wholesaler_id == wholesaler.id)
-        #                 .order_by(desc(Order.created_at))  # type: ignore
-        #             ).first()
-        # 
-        # if not last_order:
-        #     print("ERROR: Order not found for Nomba webhook")
-        #     return {"status": "error", "message": "Order not found"}
-        # 
-        # if not wholesaler:
-        #     # Fallback to get wholesaler from order
-        #     wholesaler = db.exec(
-        #         select(User).where(User.id == last_order.wholesaler_id)
-        #     ).first()
-        # 
-        # # Parse amount
-        # amount_raw = event_data.get("amount")
-        # try:
-        #     real_amount = float(amount_raw)
-        # except (ValueError, TypeError):
-        #     real_amount = float(last_order.total_amount)
-        # 
-        # amount_decimal = Decimal(str(real_amount))
-        # 
-        # # Update order status if not already paid
-        # if last_order.status != OrderStatus.PAID:
-        #     last_order.status = OrderStatus.PAID
-        #     last_order.paid_at = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
-        #     db.add(last_order)
-        #     db.commit()
-        # 
-        #     # Reduce stock for each product in the order
-        #     order_items = db.exec(
-        #         select(OrderItem).where(OrderItem.order_id == last_order.id)
-        #     ).all()
-        # 
-        #     for order_item in order_items:
-        #         product = db.exec(
-        #             select(Product).where(Product.id == order_item.product_id)
-        #         ).first()
-        #         if product:
-        #             product.stock_quantity -= order_item.quantity
-        #             db.add(product)
-        # 
-        #     db.commit()
-        # 
-        # # Create payment record
-        # channel = event_data.get("paymentMethod") or event_data.get("channel") or "nomba"
-        # 
-        # # Get timestamp
-        # timestamp_str = request.headers.get("nomba-timestamp") or payload.get("timestamp")
-        # initiated_at = datetime.utcnow()
-        # if timestamp_str:
-        #     try:
-        #         clean_timestamp = timestamp_str.replace('Z', '+00:00')
-        #         initiated_dt = datetime.fromisoformat(clean_timestamp)
-        #         if initiated_dt.tzinfo is not None:
-        #             initiated_at = initiated_dt.astimezone(pytz.utc).replace(tzinfo=None)
-        #         else:
-        #             initiated_at = initiated_dt
-        #     except Exception:
-        #         pass
-        # 
-        # new_payment = Payment(
-        #     order_id=last_order.id,
-        #     distributor_id=last_order.distributor_id,
-        #     reference_number=reference,
-        #     amount=amount_decimal,
-        #     payment_method=channel,
-        #     status=PaymentStatus.VERIFIED,
-        #     order_number=last_order.order_number,
-        #     wholesaler_name=wholesaler.full_name if wholesaler else "Unknown Wholesaler",
-        #     initiated_at=initiated_at
-        # )
-        # db.add(new_payment)
-        # db.commit()
-        # 
-        # # Log to audit trail
-        # if wholesaler:
-        #     background_tasks.add_task(
-        #         audit_action,
-        #         user_id=wholesaler.id,
-        #         user_email=wholesaler.email,
-        #         action_type="CONFIRM",
-        #         entity_type="Payment",
-        #         entity_id=str(last_order.id),
-        #         old_value={"status": "PENDING"},
-        #         new_value={
-        #             "status": "PAID",
-        #             "order_number": last_order.order_number,
-        #             "amount": str(real_amount),
-        #             "reference": reference,
-        #             "channel": channel
-        #         },
-        #         ip_address=request.client.host if request.client else "",
-        #         user_agent=request.headers.get("user-agent", "")
-        #     )
-        
-        return {"status": "received", "message": "Webhook payload received"}
-
-    except json.JSONDecodeError:
-        print("ERROR: Invalid JSON received from Nomba")
-        return {"status": "error", "message": "Invalid JSON"}
-    except HTTPException as he:
-        raise he
-    except Exception as e:
-        print(f"ERROR processing Nomba webhook: {str(e)}")
         return {"status": "error", "message": str(e)}
 
 @v1_payment.post("/bank-list")
@@ -501,6 +520,7 @@ async def list_of_supported_banks():
 
     banks = []
     for bank in bank_list:
-        banks.append(bank["name"])
+        single_bank = {"name": bank["name"], "code" : bank["code"]}
+        banks.append(single_bank)
 
     return {"list_of_banks": banks}

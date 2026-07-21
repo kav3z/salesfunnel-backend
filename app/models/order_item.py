@@ -18,12 +18,12 @@ class OrderItem(SQLModel, table=True):
     unit_price: Decimal = Field(
         nullable=False,
         decimal_places=2,
-        max_digits=10
+        max_digits=16
     )
     subtotal: Decimal = Field(
         nullable=False,
         decimal_places=2,
-        max_digits=10
+        max_digits=16
     )
     
     # Relationships

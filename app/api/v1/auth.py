@@ -14,7 +14,7 @@ from app.core.security import create_access_token, authenticate_user, hash_passw
 # External imports
 import pytz
 from sqlmodel import select
-from typing import Annotated
+from typing import Annotated, Union
 from datetime import timedelta, datetime
 from uuid import uuid4
 from fastapi import APIRouter, Depends, status, HTTPException, BackgroundTasks, UploadFile, File, Form, Request
@@ -27,18 +27,20 @@ oauth2_bearer = OAuth2PasswordBearer(tokenUrl="/v1/auth/token")
 
 db_dependency = DBSession
 
-@v1_auth.post("/token", response_model=Token)
+@v1_auth.post(
+    "/token", 
+    response_model=Token,
+    summary="User Login",
+    description="Authenticate a user with their email (passed in the username field) and password. Returns a JWT access token, user ID, and role."
+)
 async def login_for_access_token(
     db: db_dependency,
     login_data: Annotated[OAuth2PasswordRequestForm, Depends()],
-    background_tasks: BackgroundTasks,  # Add this
-    request: Request  # Add this
+    background_tasks: BackgroundTasks,
+    request: Request
 ):
     """
     Authenticate user with email and password.
-    
-    Returns:
-        Token: Access token and token type
     """
     user = authenticate_user(login_data.username, login_data.password, db)
     
@@ -93,13 +95,18 @@ async def login_for_access_token(
     )
 
 
-@v1_auth.patch("/update-password", status_code=status.HTTP_200_OK)
+@v1_auth.patch(
+    "/update-password", 
+    status_code=status.HTTP_200_OK,
+    summary="Update Password",
+    description="Update the password for the currently authenticated user by verifying their current password."
+)
 async def update_password(
     current_password: str,
     new_password: str,
     db: db_dependency,
-    background_tasks: BackgroundTasks,  # Add this
-    request: Request,  # Add this
+    background_tasks: BackgroundTasks,
+    request: Request,
     current_user: User = Depends(get_current_user)
 ):
     """Update user password"""
@@ -143,32 +150,26 @@ async def update_password(
     return {"detail": "Password successfully updated"}
 
 
-@v1_auth.post("/register-wholesaler", status_code=status.HTTP_201_CREATED, response_model=WholesalerResponse)
+@v1_auth.post(
+    "/register-wholesaler", 
+    status_code=status.HTTP_201_CREATED, 
+    response_model=WholesalerResponse,
+    summary="Register Wholesaler Account",
+    description="Register a new wholesaler account using basic business information. Initial account status is unverified."
+)
 async def register_wholesaler(
     db: db_dependency,
     background_tasks: BackgroundTasks,
-    request: Request,  # Add this
+    request: Request,
     # Form data fields
-    password: str = Form(..., min_length=8, max_length=72),
-    business_name: str = Form(..., min_length=2, max_length=255),
-    cac_registration_number: str = Form(..., min_length=5, max_length=50),
-    business_address: str = Form(..., min_length=10, max_length=500),
-    business_phone: str = Form(..., min_length=10, max_length=20),
-    business_email: str = Form(...),
-    tin: str = Form(..., min_length=5, max_length=50),
-    owner_full_name: str = Form(..., min_length=2, max_length=255),
-    owner_phone: str = Form(..., min_length=10, max_length=20),
-    owner_email: str = Form(...),
-    bank_name: str = Form(..., min_length=2, max_length=100),
-    account_name: str = Form(..., min_length=2, max_length=255),
-    account_number: str = Form(..., min_length=10, max_length=20),
-    # File uploads
-    cac_certificate: UploadFile = File(..., description="CAC Certificate"),
-    tin_certificate: UploadFile = File(..., description="TIN Certificate"),
-    utility_bill: UploadFile = File(..., description="Utility Bill or Proof of Address"),
+    password: str = Form(..., min_length=8, max_length=72, description="Account password", examples=["Password123!"]),
+    business_name: str = Form(..., min_length=2, max_length=255, description="Business name", examples=["Apex Wholesale Ltd"]),
+    business_address: str = Form(..., min_length=10, max_length=500, description="Business physical address", examples=["12 Commercial Avenue, Ikeja, Lagos"]),
+    business_phone: str = Form(..., min_length=10, max_length=20, description="Business phone number", examples=["+2348012345678"]),
+    business_email: str = Form(..., description="Business email address", examples=["wholesaler@example.com"]),
 ):
     """
-    Register a new wholesaler with complete business information and documents.
+    Register a new wholesaler with basic business credentials.
     """
     
     # Check if user already exists (by business email only)
@@ -181,40 +182,6 @@ async def register_wholesaler(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already registered"
         )
-    
-    # Check if CAC number already exists
-    existing_cac = db.exec(
-        select(WholesalerProfile).where(
-            WholesalerProfile.cac_registration_number == cac_registration_number
-        )
-    ).first()
-    
-    if existing_cac:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="CAC Registration Number already registered"
-        )
-    
-    # Check if TIN already exists
-    existing_tin = db.exec(
-        select(WholesalerProfile).where(WholesalerProfile.tin == tin)
-    ).first()
-    
-    if existing_tin:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="TIN already registered"
-        )
-    
-    # Validate file types
-    allowed_extensions = {"pdf", "jpg", "jpeg", "png"}
-    docs = [
-            (cac_certificate, "CAC Certificate"),
-            (tin_certificate, "TIN Certificate"),
-            (utility_bill, "Utility Bill")
-        ]
-    
-    validate_file_type(allowed_extensions, docs)
         
     # Create User account using Business details
     new_user = User(
@@ -230,43 +197,13 @@ async def register_wholesaler(
     db.commit()
     db.refresh(new_user)
     
-    # Save uploaded documents
-    try:
-        cac_certificate_path = await save_upload_file(
-            cac_certificate, str(new_user.id), "cac_certificate", f"wholesaler/{new_user.id}/documents"
-        )
-        tin_certificate_path = await save_upload_file(
-            tin_certificate, str(new_user.id), "tin_certificate", f"wholesaler/{new_user.id}/documents"
-        )
-        utility_bill_path = await save_upload_file(
-            utility_bill, str(new_user.id), "utility_bill", f"wholesaler/{new_user.id}/documents"
-        )
-    except Exception as e:
-        db.delete(new_user)
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to upload documents: {str(e)}"
-        )
-    
     # Create Wholesaler Profile
     wholesaler_profile = WholesalerProfile(
         user_id=new_user.id,
         business_name=business_name,
-        cac_registration_number=cac_registration_number,
         business_address=business_address,
         business_phone=business_phone,
         business_email=business_email,
-        tin=tin,
-        owner_full_name=owner_full_name,
-        owner_phone=owner_phone,
-        owner_email=owner_email,
-        bank_name=bank_name,
-        account_name=account_name,
-        account_number=account_number,
-        cac_certificate_url=cac_certificate_path,
-        tin_certificate_url=tin_certificate_path,
-        utility_bill_url=utility_bill_path,
         is_verified=False
     )
     
@@ -286,8 +223,6 @@ async def register_wholesaler(
         new_value={
             "business_name": business_name,
             "business_email": business_email,
-            "cac_registration_number": cac_registration_number,
-            "owner_full_name": owner_full_name,
             "is_verified": False
         },
         ip_address=request.client.host if request.client else "",
@@ -316,32 +251,269 @@ async def register_wholesaler(
     )
 
 
-@v1_auth.post("/register-distributor", status_code=status.HTTP_201_CREATED, response_model=DistributorResponse)
+@v1_auth.post(
+    "/verify-documents", 
+    status_code=status.HTTP_200_OK, 
+    response_model=Union[WholesalerResponse, DistributorResponse],
+    summary="Submit Verification Documents",
+    description="Submit business registration documents (CAC Certificate, TIN Certificate, Utility Bill) and registration numbers for logged-in Wholesalers or Distributors."
+)
+async def verify_documents(
+    db: db_dependency,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    # Form data fields
+    cac_registration_number: str = Form(..., min_length=5, max_length=50, description="CAC registration number", examples=["RC123456"]),
+    tin: str = Form(..., min_length=5, max_length=50, description="Tax Identification Number (TIN)", examples=["TIN987654321"]),
+    # File uploads
+    cac_certificate: UploadFile = File(..., description="CAC Certificate (PDF, PNG, JPG)"),
+    tin_certificate: UploadFile = File(..., description="TIN Certificate (PDF, PNG, JPG)"),
+    utility_bill: UploadFile = File(..., description="Utility Bill / Proof of Address (PDF, PNG, JPG)"),
+):
+    """
+    Submit business registration documents (CAC, TIN, Utility Bill) for wholesaler or distributor document verification.
+    """
+    # Validate file types
+    allowed_extensions = {"pdf", "jpg", "jpeg", "png"}
+    docs = [
+        (cac_certificate, "CAC Certificate"),
+        (tin_certificate, "TIN Certificate"),
+        (utility_bill, "Utility Bill")
+    ]
+    validate_file_type(allowed_extensions, docs)
+
+    if current_user.role == UserRole.WHOLESALER:
+        profile = db.exec(
+            select(WholesalerProfile).where(WholesalerProfile.user_id == current_user.id)
+        ).first()
+
+        if not profile:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Wholesaler profile not found"
+            )
+
+        existing_cac = db.exec(
+            select(WholesalerProfile).where(
+                WholesalerProfile.cac_registration_number == cac_registration_number,
+                WholesalerProfile.user_id != current_user.id
+            )
+        ).first()
+        if existing_cac:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="CAC Registration Number already registered"
+            )
+
+        existing_tin = db.exec(
+            select(WholesalerProfile).where(
+                WholesalerProfile.tin == tin,
+                WholesalerProfile.user_id != current_user.id
+            )
+        ).first()
+        if existing_tin:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="TIN already registered"
+            )
+
+        # Save uploaded documents
+        try:
+            cac_path = await save_upload_file(
+                cac_certificate, str(current_user.id), "cac_certificate", f"wholesaler/{current_user.id}/documents"
+            )
+            tin_path = await save_upload_file(
+                tin_certificate, str(current_user.id), "tin_certificate", f"wholesaler/{current_user.id}/documents"
+            )
+            bill_path = await save_upload_file(
+                utility_bill, str(current_user.id), "utility_bill", f"wholesaler/{current_user.id}/documents"
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to upload documents: {str(e)}"
+            )
+
+        profile.cac_registration_number = cac_registration_number
+        profile.tin = tin
+        profile.cac_certificate_url = cac_path
+        profile.tin_certificate_url = tin_path
+        profile.utility_bill_url = bill_path
+        profile.has_submitted_documents = True
+        profile.updated_at = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
+
+        db.add(profile)
+        db.commit()
+        db.refresh(profile)
+
+        background_tasks.add_task(
+            audit_action,
+            user_id=current_user.id,
+            user_email=current_user.email,
+            action_type="UPDATE_DOCUMENTS",
+            entity_type="WholesalerProfile",
+            entity_id=str(profile.id),
+            old_value=None,
+            new_value={
+                "cac_registration_number": cac_registration_number,
+                "tin": tin,
+                "documents_submitted": True
+            },
+            ip_address=request.client.host if request.client else "",
+            user_agent=request.headers.get("user-agent", "")
+        )
+
+        return WholesalerResponse(
+            id=str(profile.id),
+            user_id=str(profile.user_id),
+            business_name=profile.business_name,
+            cac_registration_number=profile.cac_registration_number,
+            business_address=profile.business_address,
+            business_phone=profile.business_phone,
+            business_email=profile.business_email,
+            tin=profile.tin,
+            owner_full_name=profile.owner_full_name,
+            owner_phone=profile.owner_phone,
+            owner_email=profile.owner_email,
+            bank_name=profile.bank_name,
+            account_name=profile.account_name,
+            account_number=profile.account_number,
+            is_verified=profile.is_verified,
+            cac_certificate_url=profile.cac_certificate_url,
+            tin_certificate_url=profile.tin_certificate_url,
+            utility_bill_url=profile.utility_bill_url
+        )
+
+    elif current_user.role == UserRole.DISTRIBUTOR:
+        profile = db.exec(
+            select(DistributorProfile).where(DistributorProfile.user_id == current_user.id)
+        ).first()
+
+        if not profile:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Distributor profile not found"
+            )
+
+        existing_cac = db.exec(
+            select(DistributorProfile).where(
+                DistributorProfile.cac_registration_number == cac_registration_number,
+                DistributorProfile.user_id != current_user.id
+            )
+        ).first()
+        if existing_cac:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="CAC Registration Number already registered"
+            )
+
+        existing_tin = db.exec(
+            select(DistributorProfile).where(
+                DistributorProfile.tin == tin,
+                DistributorProfile.user_id != current_user.id
+            )
+        ).first()
+        if existing_tin:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="TIN already registered"
+            )
+
+        # Save uploaded documents
+        try:
+            cac_path = await save_upload_file(
+                cac_certificate, str(current_user.id), "cac_certificate", f"distributor/{current_user.id}/documents"
+            )
+            tin_path = await save_upload_file(
+                tin_certificate, str(current_user.id), "tin_certificate", f"distributor/{current_user.id}/documents"
+            )
+            bill_path = await save_upload_file(
+                utility_bill, str(current_user.id), "utility_bill", f"distributor/{current_user.id}/documents"
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to upload documents: {str(e)}"
+            )
+
+        profile.cac_registration_number = cac_registration_number
+        profile.tin = tin
+        profile.cac_certificate_url = cac_path
+        profile.tin_certificate_url = tin_path
+        profile.utility_bill_url = bill_path
+        profile.has_submitted_documents = True
+        profile.updated_at = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
+
+        db.add(profile)
+        db.commit()
+        db.refresh(profile)
+
+        background_tasks.add_task(
+            audit_action,
+            user_id=current_user.id,
+            user_email=current_user.email,
+            action_type="UPDATE_DOCUMENTS",
+            entity_type="DistributorProfile",
+            entity_id=str(profile.id),
+            old_value=None,
+            new_value={
+                "cac_registration_number": cac_registration_number,
+                "tin": tin,
+                "documents_submitted": True
+            },
+            ip_address=request.client.host if request.client else "",
+            user_agent=request.headers.get("user-agent", "")
+        )
+
+        return DistributorResponse(
+            id=str(profile.id),
+            user_id=str(profile.user_id),
+            business_name=profile.business_name,
+            cac_registration_number=profile.cac_registration_number,
+            business_address=profile.business_address,
+            business_phone=profile.business_phone,
+            business_email=profile.business_email,
+            tin=profile.tin,
+            owner_full_name=profile.owner_full_name,
+            owner_phone=profile.owner_phone,
+            owner_email=profile.owner_email,
+            bank_name=profile.bank_name,
+            account_name=profile.account_name,
+            account_number=profile.account_number,
+            is_verified=profile.is_verified,
+            cac_certificate_url=profile.cac_certificate_url,
+            tin_certificate_url=profile.tin_certificate_url,
+            utility_bill_url=profile.utility_bill_url
+        )
+
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin accounts cannot submit document verification"
+        )
+
+
+@v1_auth.post(
+    "/register-distributor", 
+    status_code=status.HTTP_201_CREATED, 
+    response_model=DistributorResponse,
+    summary="Register Distributor Account",
+    description="Register a new distributor account using basic business information. Initial account status is unverified."
+)
 async def register_distributor(
     db: db_dependency,
     background_tasks: BackgroundTasks,
-    request: Request,  # Add this
+    request: Request,
     # Form data fields
-    password: str = Form(..., min_length=8, max_length=72),
-    business_name: str = Form(..., min_length=2, max_length=255),
-    cac_registration_number: str = Form(..., min_length=5, max_length=50),
-    business_address: str = Form(..., min_length=10, max_length=500),
-    business_phone: str = Form(..., min_length=10, max_length=20),
-    business_email: str = Form(...),
-    tin: str = Form(..., min_length=5, max_length=50),
-    owner_full_name: str = Form(..., min_length=2, max_length=255),
-    owner_phone: str = Form(..., min_length=10, max_length=20),
-    owner_email: str = Form(...),
-    bank_name: str = Form(..., min_length=2, max_length=100),
-    account_name: str = Form(..., min_length=2, max_length=255),
-    account_number: str = Form(..., min_length=10, max_length=20),
-    # File uploads
-    cac_certificate: UploadFile = File(..., description="CAC Certificate"),
-    tin_certificate: UploadFile = File(..., description="TIN Certificate"),
-    utility_bill: UploadFile = File(..., description="Utility Bill or Proof of Address"),
+    password: str = Form(..., min_length=8, max_length=72, description="Account password", examples=["Password123!"]),
+    business_name: str = Form(..., min_length=2, max_length=255, description="Business name", examples=["Prime Distribution Hub"]),
+    business_address: str = Form(..., min_length=10, max_length=500, description="Business physical address", examples=["45 Warehouse Road, Apapa, Lagos"]),
+    business_phone: str = Form(..., min_length=10, max_length=20, description="Business phone number", examples=["+2348098765432"]),
+    business_email: str = Form(..., description="Business email address", examples=["distributor@example.com"]),
 ):
     """
-    Register a new distributor with complete business information and documents.
+    Register a new distributor with basic business credentials.
     """
     
     # Check if user already exists
@@ -354,40 +526,6 @@ async def register_distributor(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already registered"
         )
-    
-    # Check if CAC number already exists
-    existing_cac = db.exec(
-        select(DistributorProfile).where(
-            DistributorProfile.cac_registration_number == cac_registration_number
-        )
-    ).first()
-    
-    if existing_cac:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="CAC Registration Number already registered"
-        )
-    
-    # Check if TIN already exists
-    existing_tin = db.exec(
-        select(DistributorProfile).where(DistributorProfile.tin == tin)
-    ).first()
-    
-    if existing_tin:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="TIN already registered"
-        )
-    
-    # Validate file types
-    allowed_extensions = {"pdf", "jpg", "jpeg", "png"}
-    docs = [
-            (cac_certificate, "CAC Certificate"),
-            (tin_certificate, "TIN Certificate"),
-            (utility_bill, "Utility Bill")
-        ]
-    
-    validate_file_type(allowed_extensions, docs)
     
     # Create User account using Business details
     new_user = User(
@@ -403,44 +541,13 @@ async def register_distributor(
     db.commit()
     db.refresh(new_user)
     
-    # Save uploaded documents
-    try:
-        cac_certificate_path = await save_upload_file(
-            cac_certificate, str(new_user.id), "cac_certificate", f"distributor/{new_user.id}/documents"
-        )
-        tin_certificate_path = await save_upload_file(
-            tin_certificate, str(new_user.id), "tin_certificate", f"distributor/{new_user.id}/documents"
-        )
-        utility_bill_path = await save_upload_file(
-            utility_bill, str(new_user.id), "utility_bill", f"distributor/{new_user.id}/documents"
-        )
-    except Exception as e:
-        db.delete(new_user)
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to upload documents: {str(e)}"
-        )
-    
     # Create Distributor Profile
     distributor_profile = DistributorProfile(
         user_id=new_user.id,
         business_name=business_name,
-        cac_registration_number=cac_registration_number,
         business_address=business_address,
         business_phone=business_phone,
         business_email=business_email,
-        tin=tin,
-        owner_full_name=owner_full_name,
-        owner_phone=owner_phone,
-        owner_email=owner_email,
-        bank_name=bank_name,
-        account_name=account_name,
-        account_number=account_number,
-        subaccount_code="a-short-code",
-        cac_certificate_url=cac_certificate_path,
-        tin_certificate_url=tin_certificate_path,
-        utility_bill_url=utility_bill_path,
         is_verified=False
     )
     
@@ -460,8 +567,6 @@ async def register_distributor(
         new_value={
             "business_name": business_name,
             "business_email": business_email,
-            "cac_registration_number": cac_registration_number,
-            "owner_full_name": owner_full_name,
             "is_verified": False
         },
         ip_address=request.client.host if request.client else "",
@@ -490,15 +595,18 @@ async def register_distributor(
     )
 
 
-@v1_auth.get("/users/profile", response_model=UserProfileResponse)
+@v1_auth.get(
+    "/users/profile", 
+    response_model=UserProfileResponse,
+    summary="Get Logged-in User Profile",
+    description="Retrieve the profile details of the authenticated user, including their role-specific wholesaler or distributor business profile data."
+)
 async def get_user_profile(
     db: db_dependency,
     current_user: User = Depends(get_current_user)
 ):
     """
     Get current user's complete profile information.
-    
-    Returns user info along with wholesaler or distributor profile if applicable.
     """
     user_id = current_user.id
     user = db.get(User, user_id)
@@ -542,6 +650,7 @@ async def get_user_profile(
                 bank_name=wholesaler_profile.bank_name,
                 account_name=wholesaler_profile.account_name,
                 account_number=wholesaler_profile.account_number,
+                has_submitted_documents=wholesaler_profile.has_submitted_documents,
                 is_verified=wholesaler_profile.is_verified,
                 cac_certificate_url=wholesaler_profile.cac_certificate_url,
                 tin_certificate_url=wholesaler_profile.tin_certificate_url,
@@ -569,6 +678,7 @@ async def get_user_profile(
                 bank_name=distributor_profile.bank_name,
                 account_name=distributor_profile.account_name,
                 account_number=distributor_profile.account_number,
+                has_submitted_documents=distributor_profile.has_submitted_documents,
                 is_verified=distributor_profile.is_verified,
                 cac_certificate_url=distributor_profile.cac_certificate_url,
                 tin_certificate_url=distributor_profile.tin_certificate_url,
@@ -578,7 +688,12 @@ async def get_user_profile(
     return response
 
 
-@v1_auth.put("/users/profile", response_model=UserProfileResponse)
+@v1_auth.put(
+    "/users/profile", 
+    response_model=UserProfileResponse,
+    summary="Update User Business Profile",
+    description="Update profile fields (business name, address, phone, email, owner details) for the currently authenticated user."
+)
 async def update_user_profile(
     db: db_dependency,
     profile_update: UserProfileUpdate,
@@ -641,18 +756,7 @@ async def update_user_profile(
                 old_values["owner_email"] = wholesaler_profile.owner_email
                 new_values["owner_email"] = update_data.owner_email
                 wholesaler_profile.owner_email = update_data.owner_email
-            if update_data.bank_name is not None:
-                old_values["bank_name"] = wholesaler_profile.bank_name
-                new_values["bank_name"] = update_data.bank_name
-                wholesaler_profile.bank_name = update_data.bank_name
-            if update_data.account_name is not None:
-                old_values["account_name"] = wholesaler_profile.account_name
-                new_values["account_name"] = update_data.account_name
-                wholesaler_profile.account_name = update_data.account_name
-            if update_data.account_number is not None:
-                old_values["account_number"] = wholesaler_profile.account_number
-                new_values["account_number"] = update_data.account_number
-                wholesaler_profile.account_number = update_data.account_number
+            
             
             wholesaler_profile.updated_at = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
             db.add(wholesaler_profile)
@@ -694,18 +798,6 @@ async def update_user_profile(
                 old_values["owner_email"] = distributor_profile.owner_email
                 new_values["owner_email"] = update_data.owner_email
                 distributor_profile.owner_email = update_data.owner_email
-            if update_data.bank_name is not None:
-                old_values["bank_name"] = distributor_profile.bank_name
-                new_values["bank_name"] = update_data.bank_name
-                distributor_profile.bank_name = update_data.bank_name
-            if update_data.account_name is not None:
-                old_values["account_name"] = distributor_profile.account_name
-                new_values["account_name"] = update_data.account_name
-                distributor_profile.account_name = update_data.account_name
-            if update_data.account_number is not None:
-                old_values["account_number"] = distributor_profile.account_number
-                new_values["account_number"] = update_data.account_number
-                distributor_profile.account_number = update_data.account_number
             
             distributor_profile.updated_at = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
             db.add(distributor_profile)

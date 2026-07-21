@@ -35,7 +35,7 @@ class Order(SQLModel, table=True):
     total_amount: Decimal = Field(
         nullable=False,
         decimal_places=2,
-        max_digits=10
+        max_digits=16
     )
     status: OrderStatus = Field(default=OrderStatus.PENDING, nullable=False, index=True)
     notes: Optional[str] = Field(default=None)
@@ -46,6 +46,7 @@ class Order(SQLModel, table=True):
     contact_name: str = Field(nullable=False)
     contact_phone_no: str = Field(nullable=False)
     delivery_instructions: Optional[str] = Field(default=None)
+    mode_of_transport: Optional[str] = Field(default=None, nullable=True)
 
     # Timestamps
     created_at: datetime = Field(default_factory=get_lagos_time)

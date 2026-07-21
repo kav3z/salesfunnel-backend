@@ -15,26 +15,28 @@ class DistributorProfile(SQLModel, table=True):
     
     # Company Information
     business_name: str = Field(..., max_length=255)
-    cac_registration_number: str = Field(..., max_length=50, unique=True)
+    cac_registration_number: Optional[str] = Field(default=None, max_length=50, unique=True, nullable=True)
     business_address: str = Field(..., max_length=500)
     business_phone: str = Field(..., max_length=20)
     business_email: str = Field(..., max_length=255)
     
     # Tax & Compliance
-    tin: str = Field(..., max_length=50, unique=True)
+    tin: Optional[str] = Field(default=None, max_length=50, unique=True, nullable=True)
     
     # Owner/Director Details
-    owner_full_name: str = Field(..., max_length=255)
-    owner_phone: str = Field(..., max_length=20)
-    owner_email: str = Field(..., max_length=255)
+    owner_full_name: Optional[str] = Field(default=None, max_length=255, nullable=True)
+    owner_phone: Optional[str] = Field(default=None, max_length=20, nullable=True)
+    owner_email: Optional[str] = Field(default=None, max_length=255, nullable=True)
     
     # Bank Details (for payment settlement)
-    bank_name: str = Field(..., max_length=100)
-    account_name: str = Field(..., max_length=255)
-    account_number: str = Field(..., max_length=20)
+    bank_name: Optional[str] = Field(default=None, max_length=100, nullable=True)
+    account_name: Optional[str] = Field(default=None, max_length=255, nullable=True)
+    account_number: Optional[str] = Field(default=None, max_length=20, nullable=True)
 
     # paystack information
-    subaccount_code: str = Field(nullable=True)
+    subaccount_code: Optional[str] = Field(default=None, nullable=True)
+    paystack_dedicated_account_id: Optional[str] = Field(default=None, nullable=True)
+    is_bank_active: bool = Field(default=False)
     
     # Verification Documents (file paths/URLs)
     cac_certificate_url: Optional[str] = Field(default=None, max_length=500)
@@ -42,6 +44,7 @@ class DistributorProfile(SQLModel, table=True):
     utility_bill_url: Optional[str] = Field(default=None, max_length=500)
     
     # Verification status
+    has_submitted_documents: bool = Field(default=False)
     is_verified: bool = Field(default=False)
     verified_at: Optional[datetime] = Field(default=None)
     

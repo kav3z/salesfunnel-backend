@@ -1,18 +1,24 @@
 from typing import List
 from fastapi import APIRouter, HTTPException, status, Request
-from sqlmodel import  select
+from sqlmodel import select
 import uuid
 
 # Adjust these imports based on your actual project structure
 from app.core.dependencies import DBSession
 from app.models.category import Category
-from app.schemas.category import CategoryCreate, CategoryRead
+from app.schemas.category import CategoryCreate, CategoryRead, CategoryUpdate
 
-v1_category = APIRouter(prefix="/v1", tags=['v1_category'])
+v1_category = APIRouter(prefix="/v1/categories", tags=['v1_category'])
 
 db_dependency = DBSession
 
-@v1_category.post("/", status_code=status.HTTP_201_CREATED)
+@v1_category.post(
+    "", 
+    response_model=CategoryRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create Category",
+    description="Create a new product category."
+)
 async def create_category(db: db_dependency, category: CategoryCreate):
     """
     Create a new category.
@@ -26,23 +32,27 @@ async def create_category(db: db_dependency, category: CategoryCreate):
     db.add(new_category)
     db.commit()
     db.refresh(new_category)
+    return new_category
 
-@v1_category.get("/", response_model=List[CategoryRead])
+@v1_category.get(
+    "", 
+    response_model=List[CategoryRead],
+    summary="List Categories",
+    description="Retrieve all product categories."
+)
 def list_categories(db: db_dependency, request: Request):
     """
     List all categories.
     """
-    # Extract request data
-    ip_address = request.client.host if request.client else None
-    user_agent = request.headers.get("user-agent")
-    
-    # You can log this or do something with it
-    print(f"IP: {ip_address}, User-Agent: {user_agent}")
-    
     categories = db.exec(select(Category)).all()
     return categories
 
-@v1_category.delete("/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
+@v1_category.delete(
+    "/{category_id}", 
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete Category",
+    description="Delete a product category by ID."
+)
 def delete_category(category_id: uuid.UUID, db: db_dependency):
     """
     Delete a category by ID.

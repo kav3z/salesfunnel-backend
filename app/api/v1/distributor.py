@@ -31,11 +31,40 @@ v1_distributor = APIRouter(prefix="/v1", tags=['v1_distributor'])
 db_dependency = DBSession
 
 
-@v1_distributor.get(
-        "/products", 
-        response_model=ProductListResponse, 
-        status_code=status.HTTP_200_OK
+def verify_active_distributor(current_user: User, db: DBSession) -> DistributorProfile:
+    """Helper to check if distributor has submitted documents and is verified by admin"""
+    if current_user.role != UserRole.DISTRIBUTOR:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only distributors can perform this action"
         )
+    
+    profile = db.exec(
+        select(DistributorProfile).where(DistributorProfile.user_id == current_user.id)
+    ).first()
+
+    if not profile or not profile.has_submitted_documents:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You must submit verification documents before performing distributor operations"
+        )
+
+    if not profile.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your distributor account must be verified by an administrator to perform this action"
+        )
+
+    return profile
+
+
+@v1_distributor.get(
+    "/products", 
+    response_model=ProductListResponse, 
+    status_code=status.HTTP_200_OK,
+    summary="Get All Products",
+    description="Retrieve a paginated list of all products with optional filters for category, distributor ID, search query, and availability."
+)
 async def get_all_products(
     db: db_dependency,
     page: int = Query(default=1, ge=1, description="Page number"),
@@ -47,19 +76,6 @@ async def get_all_products(
 ):
     """
     Retrieve a list of all products with optional filtering and pagination.
-    
-    This endpoint is used for the "All Products / Distributor Selection" view.
-    
-    Args:
-        page: Page number for pagination
-        page_size: Number of items per page
-        category: Optional category filter
-        distributor_id: Optional distributor filter
-        search: Optional search term for product name
-        available_only: If True, only return available products
-    
-    Returns:
-        ProductListResponse: Paginated list of products
     """
     # Build base query
     query = select(Product)
@@ -106,25 +122,29 @@ async def get_all_products(
 
 
 @v1_distributor.post(
-    "/distributors/{distributor_id}/products", 
+    "/distributor/products", 
     response_model=ProductResponse, 
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_role([UserRole.DISTRIBUTOR, UserRole.ADMIN]))]
+    summary="Create Product",
+    description="Add a new product to the distributor's catalog using Form data. Supports optional file upload or image URL.",
+    dependencies=[Depends(require_role([UserRole.DISTRIBUTOR]))]
 )
-async def add_product_to_distributor_catalog(
+async def create_product(
     db: db_dependency,
     current_user: CurrentUser,
-    background_tasks: BackgroundTasks,  # Add this
-    request: Request,  # Add this
-    sku: str = Form(...),
-    name: str = Form(...),
-    description: Optional[str] = Form(None),
-    price_per_case: Decimal = Form(...),
-    stock_quantity: int = Form(...),
-    category: str = Form(...),
-    is_available: bool = Form(True),
-    image_url: Optional[str] = Form(None),
-    image: Optional[UploadFile] = File(None)
+    background_tasks: BackgroundTasks,
+    request: Request,
+    sku: str = Form(..., description="Unique SKU code", examples=["DRK-ENG-001"]),
+    name: str = Form(..., description="Product name", examples=["Premium Energy Drink (Case of 24)"]),
+    description: Optional[str] = Form(None, description="Product description", examples=["High-energy 500ml canned drinks packaged in cases of 24."]),
+    price_per_case: Decimal = Form(..., description="Price per case in NGN", examples=[15000.00]),
+    stock_quantity: int = Form(..., description="Quantity of cases in stock", examples=[100]),
+    category: str = Form(..., description="Product category name", examples=["Beverages"]),
+    is_available: bool = Form(True, description="Availability status", examples=[True]),
+    image_url: Optional[str] = Form(None, description="Optional image URL", examples=["https://res.cloudinary.com/demo/image/upload/sample.jpg"]),
+    image: Optional[UploadFile] = File(None, description="Optional product image file upload"),
+    weight: Optional[int] = Form(None, description="Product weight in grams", examples=[12000]),
+    dimensions: Optional[str] = Form(None, description="JSON string for dimensions: {\"length\": X, \"width\": Y, \"height\": Z}", examples=['{"length": 40.0, "width": 30.0, "height": 25.0}'])
 ):
     """
     Add a new product to a distributor's catalog with optional image upload or image URL.
@@ -132,6 +152,7 @@ async def add_product_to_distributor_catalog(
     This endpoint accepts Form data instead of JSON to support file uploads.
     """
 
+    verify_active_distributor(current_user, db)
     distributor_id = current_user.id
     # Additional check for Distributor trying to add to another's catalog
     if current_user.role == UserRole.DISTRIBUTOR and current_user.id != distributor_id:
@@ -187,6 +208,19 @@ async def add_product_to_distributor_catalog(
             )
     elif image_url:
         image_url_path = image_url
+
+    import json
+    dimensions_dict = None
+    if dimensions:
+        try:
+            dimensions_dict = json.loads(dimensions)
+            if not isinstance(dimensions_dict, dict) or not all(k in dimensions_dict for k in ('length', 'width', 'height')):
+                raise ValueError
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid JSON format for dimensions. Expected format: '{\"length\": X, \"width\": Y, \"height\": Z}'"
+            )
     
     # Create new product
     new_product = Product(
@@ -199,7 +233,9 @@ async def add_product_to_distributor_catalog(
         category=category,
         category_id=existing_category.id,
         image_url=image_url_path,
-        is_available=is_available
+        is_available=is_available,
+        dimensions=dimensions_dict,
+        weight=weight
     )
     
     db.add(new_product)
@@ -314,7 +350,9 @@ async def get_distributor_products(
 @v1_distributor.get(
     "/products/{product_id}",
     response_model=ProductResponse,
-    status_code=status.HTTP_200_OK
+    status_code=status.HTTP_200_OK,
+    summary="Get Product Details",
+    description="Retrieve details of a single product by UUID."
 )
 async def get_product_details(
     product_id: UUID,
@@ -322,17 +360,6 @@ async def get_product_details(
 ):
     """
     Retrieve details of a single product.
-    
-    This endpoint is used for the "Wholesaler Product Detail Page".
-    
-    Args:
-        product_id: UUID of the product
-    
-    Returns:
-        ProductResponse: Product details
-        
-    Raises:
-        HTTPException 404: If product not found
     """
     product = db.exec(
         select(Product).where(Product.id == product_id)
@@ -350,7 +377,9 @@ async def get_product_details(
 @v1_distributor.get(
     "/distributors",
     response_model=List[DistributorListResponse],
-    status_code=status.HTTP_200_OK
+    status_code=status.HTTP_200_OK,
+    summary="List Verified Distributors",
+    description="Retrieve a list of verified distributor accounts with optional search filter."
 )
 async def get_all_distributors(
     db: db_dependency,
@@ -359,15 +388,6 @@ async def get_all_distributors(
 ):
     """
     Retrieve a list of all distributors.
-    
-    This endpoint returns all distributors including popular ones.
-    
-    Args:
-        verified_only: If True, only return verified distributors
-        search: Optional search term for business name
-    
-    Returns:
-        List[DistributorListResponse]: List of distributors
     """
     # Build query for distributor profiles
     query = select(DistributorProfile)
@@ -404,6 +424,8 @@ async def get_all_distributors(
     "/distributors/{distributor_id}/products/{product_id}",
     response_model=ProductResponse,
     status_code=status.HTTP_200_OK,
+    summary="Update Product",
+    description="Update fields for an existing product in the distributor's catalog.",
     dependencies=[Depends(require_role([UserRole.DISTRIBUTOR, UserRole.ADMIN]))]
 )
 async def update_distributor_product(
@@ -411,35 +433,21 @@ async def update_distributor_product(
     product_data: ProductUpdate,
     db: db_dependency,
     current_user: CurrentUser,
-    background_tasks: BackgroundTasks,  # Add this
-    request: Request  # Add this
+    background_tasks: BackgroundTasks,
+    request: Request
 ):
     """
     Update product details for a distributor's catalog.
-    
-    This endpoint is restricted to Distributors (for their own products) and Admins.
-    
-    Args:
-        distributor_id: UUID of the distributor
-        product_id: UUID of the product to update
-        product_data: Product update data
-    
-    Returns:
-        ProductResponse: Updated product details
-        
-    Raises:
-        HTTPException 403: If user is not authorized to update products
-        HTTPException 404: If distributor or product not found
     """
+    if current_user.role == UserRole.DISTRIBUTOR:
+        verify_active_distributor(current_user, db)
     distributor_id = current_user.id
-    # Additional check for Distributor trying to update another's catalog
     if current_user.role == UserRole.DISTRIBUTOR and current_user.id != distributor_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only update products in your own catalog"
         )
     
-    # Verify distributor exists
     distributor = db.exec(
         select(User).where(User.id == distributor_id, User.role == UserRole.DISTRIBUTOR)
     ).first()
@@ -450,7 +458,6 @@ async def update_distributor_product(
             detail="Distributor not found"
         )
     
-    # Find the product
     product = db.exec(
         select(Product).where(
             Product.id == product_id,
@@ -464,7 +471,6 @@ async def update_distributor_product(
             detail="Product not found in this distributor's catalog"
         )
     
-    # Store old values for audit
     old_value = {
         "name": product.name,
         "price_per_case": str(product.price_per_case),
@@ -472,19 +478,16 @@ async def update_distributor_product(
         "is_available": product.is_available
     }
     
-    # Update only provided fields
     update_data = product_data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(product, field, value)
     
-    # Update timestamp
     product.updated_at = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
     
     db.add(product)
     db.commit()
     db.refresh(product)
     
-    # Log to audit trail
     background_tasks.add_task(
         audit_action,
         user_id=current_user.id,
@@ -504,37 +507,29 @@ async def update_distributor_product(
 @v1_distributor.delete(
     "/distributors/{distributor_id}/products/{product_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete Product",
+    description="Remove a product from the distributor's catalog.",
     dependencies=[Depends(require_role([UserRole.DISTRIBUTOR, UserRole.ADMIN]))]
 )
 async def delete_distributor_product(
     product_id: UUID,
     db: db_dependency,
     current_user: CurrentUser,
-    background_tasks: BackgroundTasks,  # Add this
-    request: Request  # Add this
+    background_tasks: BackgroundTasks,
+    request: Request
 ):
     """
     Remove a product from a distributor's catalog.
-    
-    This endpoint is restricted to Distributors (for their own products) and Admins.
-    
-    Args:
-        distributor_id: UUID of the distributor
-        product_id: UUID of the product to remove
-        
-    Raises:
-        HTTPException 403: If user is not authorized to delete products
-        HTTPException 404: If distributor or product not found
     """
+    if current_user.role == UserRole.DISTRIBUTOR:
+        verify_active_distributor(current_user, db)
     distributor_id = current_user.id
-    # Additional check for Distributor trying to delete from another's catalog
     if current_user.role == UserRole.DISTRIBUTOR and current_user.id != distributor_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only delete products from your own catalog"
         )
     
-    # Verify distributor exists
     distributor = db.exec(
         select(User).where(User.id == distributor_id, User.role == UserRole.DISTRIBUTOR)
     ).first()
@@ -545,7 +540,6 @@ async def delete_distributor_product(
             detail="Distributor not found"
         )
     
-    # Find the product
     product = db.exec(
         select(Product).where(
             Product.id == product_id,
@@ -559,7 +553,6 @@ async def delete_distributor_product(
             detail="Product not found in this distributor's catalog"
         )
 
-    # Store product details for audit before deletion
     product_details = {
         "sku": product.sku,
         "name": product.name,
@@ -568,24 +561,17 @@ async def delete_distributor_product(
         "is_available": product.is_available
     }
 
-    print("Reaching this line")
-    # Check for associated order items
     has_orders = db.exec(select(OrderItem).where(OrderItem.product_id == product_id)).first()
-    print(has_orders)
 
     if has_orders:
-        print("can soft delete")
-        # Soft delete: Product has history, so just mark it as deleted
         product.is_deleted = True
         product.is_available = False 
         db.add(product)
     else:
-        # Hard delete: Product has no history, safe to remove completely
         db.delete(product)
         
     db.commit()
     
-    # Log to audit trail
     delete_type = "SOFT_DELETE" if has_orders else "HARD_DELETE"
     background_tasks.add_task(
         audit_action,
@@ -605,6 +591,8 @@ async def delete_distributor_product(
     "/distributor/orders/new",
     response_model=OrderListResponse,
     status_code=status.HTTP_200_OK,
+    summary="List New Incoming Orders",
+    description="Retrieve new incoming orders (pending or paid) for the distributor.",
     dependencies=[Depends(require_role([UserRole.DISTRIBUTOR]))]
 )
 async def get_new_distributor_orders(
@@ -615,22 +603,8 @@ async def get_new_distributor_orders(
 ):
     """
     Retrieve new incoming orders for a distributor.
-    
-    Returns orders with "pending" or "paid" status for the authenticated distributor.
-    
-    Args:
-        page: Page number for pagination
-        page_size: Number of items per page
-    
-    Returns:
-        OrderListResponse: Paginated list of new orders
-        
-    Raises:
-        HTTPException 403: If user is not a distributor
     """
-    # Role check removed as it is handled by require_role dependency
-    
-    # Build query for new orders (pending or paid status)
+    verify_active_distributor(current_user, db)
     query = select(Order).where(
         Order.distributor_id == current_user.id,
         or_(Order.status == OrderStatus.PENDING, Order.status == OrderStatus.PAID)
@@ -640,29 +614,33 @@ async def get_new_distributor_orders(
         or_(Order.status == OrderStatus.PENDING, Order.status == OrderStatus.PAID)
     )
     
-    # Get total count
     total = db.exec(count_query).one()
-    
-    # Calculate pagination
     total_pages = ceil(total / page_size) if total > 0 else 1
     offset = (page - 1) * page_size
-    
-    # Apply pagination and ordering (newest first)
     query = query.order_by(desc(Order.created_at)).offset(offset).limit(page_size)
-    
-    # Execute query
     orders = db.exec(query).all()
     
-    # Fetch wholesaler names for each order
     order_responses = []
     for order in orders:
         wholesaler = db.exec(
             select(User).where(User.id == order.wholesaler_id)
         ).first()
         order_data = {
-            **order.__dict__,
+            'id': order.id,
+            'order_number': order.order_number,
+            'wholesaler_id': order.wholesaler_id,
             'wholesaler_name': wholesaler.full_name if wholesaler else None,
-            'distributor_name': current_user.full_name
+            'distributor_name': current_user.full_name,
+            'total_amount': order.total_amount,
+            'status': order.status,
+            'notes': order.notes,
+            'created_at': order.created_at,
+            'paid_at': order.paid_at,
+            'approved_at': order.approved_at,
+            'ready_at': order.ready_at,
+            'completed_at': order.completed_at,
+            'cancelled_at': order.cancelled_at,
+            'mode_of_transport': order.mode_of_transport
         }
         order_responses.append(OrderResponse(**order_data))
     
@@ -679,6 +657,8 @@ async def get_new_distributor_orders(
     "/distributor/orders/{order_id}",
     response_model=OrderDetailResponse,
     status_code=status.HTTP_200_OK,
+    summary="Get Order Details",
+    description="Retrieve full details and items of a specific distributor order.",
     dependencies=[Depends(require_role([UserRole.DISTRIBUTOR]))]
 )
 async def get_distributor_order_details(
@@ -688,22 +668,8 @@ async def get_distributor_order_details(
 ):
     """
     Retrieve details of a specific order for a distributor.
-    
-    Returns complete order details including order items.
-    
-    Args:
-        order_id: UUID of the order
-    
-    Returns:
-        OrderDetailResponse: Detailed order information with items
-        
-    Raises:
-        HTTPException 403: If user is not a distributor or not authorized
-        HTTPException 404: If order not found
     """
-    # Role check removed as it is handled by require_role dependency
-    
-    # Find the order
+    verify_active_distributor(current_user, db)
     order = db.exec(
         select(Order).where(
             Order.id == order_id,
@@ -717,33 +683,38 @@ async def get_distributor_order_details(
             detail="Order not found or you don't have access to this order"
         )
     
-    # Get order items with product details
     order_items = db.exec(
         select(OrderItem).where(OrderItem.order_id == order_id)
     ).all()
 
-    # Get all product IDs from order items
     product_ids = [item.product_id for item in order_items]
 
-    # Fetch all products in one query for efficiency
     products = db.exec(
         select(Product).where(Product.id.in_(product_ids))  # type: ignore
     ).all()
 
-    # Create a product lookup dictionary
     product_lookup = {product.id: product for product in products}
 
-    
-    # Get wholesaler name
     wholesaler_profile = db.exec(
         select(User).where(User.id == order.wholesaler_id)
     ).first()
     
-    # Build order response with wholesaler_name and distributor_name
     order_data = {
-        **order.__dict__,
+        'id': order.id,
+        'order_number': order.order_number,
+        'wholesaler_id': order.wholesaler_id,
         'wholesaler_name': wholesaler_profile.full_name if wholesaler_profile else None,
-        'distributor_name': current_user.full_name
+        'distributor_name': current_user.full_name,
+        'total_amount': order.total_amount,
+        'status': order.status,
+        'notes': order.notes,
+        'created_at': order.created_at,
+        'paid_at': order.paid_at,
+        'approved_at': order.approved_at,
+        'ready_at': order.ready_at,
+        'completed_at': order.completed_at,
+        'cancelled_at': order.cancelled_at,
+        'mode_of_transport': order.mode_of_transport
     }
     order_response = OrderResponse(**order_data)
 
@@ -770,6 +741,8 @@ async def get_distributor_order_details(
     "/distributor/orders/{order_id}/status",
     response_model=OrderResponse,
     status_code=status.HTTP_200_OK,
+    summary="Update Order Status",
+    description="Update status of an order (e.g. approve, mark ready for pickup, complete, or cancel).",
     dependencies=[Depends(require_role([UserRole.DISTRIBUTOR]))]
 )
 async def update_distributor_order_status(
@@ -777,29 +750,13 @@ async def update_distributor_order_status(
     status_update: OrderStatusUpdate,
     db: db_dependency,
     current_user: CurrentUser,
-    background_tasks: BackgroundTasks,  # Add this
-    request: Request  # Add this
+    background_tasks: BackgroundTasks,
+    request: Request
 ):
     """
     Update the order status (e.g., "Packaging Confirmation").
-    
-    Distributors can update order status to track order progress.
-    
-    Args:
-        order_id: UUID of the order
-        status_update: New status information
-    
-    Returns:
-        OrderResponse: Updated order information
-        
-    Raises:
-        HTTPException 403: If user is not a distributor or not authorized
-        HTTPException 404: If order not found
-        HTTPException 400: If status transition is invalid
     """
-    # Role check removed as it is handled by require_role dependency
-    
-    # Find the order
+    verify_active_distributor(current_user, db)
     order = db.exec(
         select(Order).where(
             Order.id == order_id,
@@ -813,7 +770,6 @@ async def update_distributor_order_status(
             detail="Order not found or you don't have access to this order"
         )
     
-    # Validate status transition
     valid_transitions = {
         OrderStatus.PENDING: [OrderStatus.PAID, OrderStatus.CANCELLED],
         OrderStatus.PAID: [OrderStatus.CANCELLED],
@@ -828,13 +784,9 @@ async def update_distributor_order_status(
             detail=f"Invalid status transition from {order.status} to {status_update.status}"
         )
     
-    # Store old status for audit
     old_status = order.status
-    
-    # Update order status
     order.status = status_update.status
     
-    # Update relevant timestamp
     now = datetime.now(pytz.timezone('Africa/Lagos')).replace(tzinfo=None)
     if status_update.status == OrderStatus.READY_FOR_PICKUP:
         order.ready_at = now
@@ -847,7 +799,6 @@ async def update_distributor_order_status(
     db.commit()
     db.refresh(order)
     
-    # Log to audit trail
     background_tasks.add_task(
         audit_action,
         user_id=current_user.id,
@@ -861,15 +812,26 @@ async def update_distributor_order_status(
         user_agent=request.headers.get("user-agent", "")
     )
     
-    # Fetch wholesaler and distributor names for OrderResponse
     wholesaler = db.exec(
         select(User).where(User.id == order.wholesaler_id)
     ).first()
     
     order_data = {
-        **order.__dict__,
+        'id': order.id,
+        'order_number': order.order_number,
+        'wholesaler_id': order.wholesaler_id,
         'wholesaler_name': wholesaler.full_name if wholesaler else None,
-        'distributor_name': current_user.full_name
+        'distributor_name': current_user.full_name,
+        'total_amount': order.total_amount,
+        'status': order.status,
+        'notes': order.notes,
+        'created_at': order.created_at,
+        'paid_at': order.paid_at,
+        'approved_at': order.approved_at,
+        'ready_at': order.ready_at,
+        'completed_at': order.completed_at,
+        'cancelled_at': order.cancelled_at,
+        'mode_of_transport': order.mode_of_transport
     }
     
     return OrderResponse(**order_data)
@@ -879,6 +841,8 @@ async def update_distributor_order_status(
     "/distributor/dashboard",
     response_model=DistributorDashboardResponse,
     status_code=status.HTTP_200_OK,
+    summary="Get Distributor Dashboard Stats",
+    description="Retrieve total revenue, catalog count, order status totals, and monthly revenue metrics.",
     dependencies=[Depends(require_role([UserRole.DISTRIBUTOR]))]
 )
 async def get_distributor_dashboard(
@@ -887,25 +851,10 @@ async def get_distributor_dashboard(
 ):
     """
     Retrieve distributor dashboard statistics.
-    
-    Provides an overview of:
-    - Total revenue from paid orders
-    - Total products in catalog
-    - Order counts by status (paid, completed)
-    - Monthly revenue trend
-    
-    Args:
-        None (uses authenticated distributor)
-    
-    Returns:
-        DistributorDashboardResponse: Dashboard statistics
-        
-    Raises:
-        HTTPException 403: If user is not a distributor
     """
+    verify_active_distributor(current_user, db)
     distributor_id = current_user.id
     
-    # 1. Calculate total revenue (from paid and completed orders only)
     total_revenue_query = select(func.sum(OrderItem.subtotal)).select_from(OrderItem).join(
         Order, OrderItem.order_id == Order.id # type: ignore
     ).where(
@@ -916,13 +865,11 @@ async def get_distributor_dashboard(
     total_revenue = db.exec(total_revenue_query).one() or Decimal(0)
     total_revenue = float(total_revenue)
     
-    # 2. Calculate total products
     total_products_query = select(func.count()).select_from(Product).where(
         Product.distributor_id == distributor_id
     )
     total_products = db.exec(total_products_query).one()
     
-    # 3. Get orders by status (paid and completed)
     paid_count_query = select(func.count()).select_from(Order).where(
         Order.distributor_id == distributor_id,
         Order.status == OrderStatus.PAID
@@ -940,7 +887,6 @@ async def get_distributor_dashboard(
         "completed": completed_count
     }
     
-   
     return DistributorDashboardResponse(
         total_revenue=total_revenue,
         total_products=total_products,
@@ -957,6 +903,8 @@ async def get_distributor_dashboard(
     "/distributor/payments",
     response_model=PaymentListResponse,
     status_code=status.HTTP_200_OK,
+    summary="List Received Payments",
+    description="Retrieve a paginated list of payments received by the distributor from wholesalers.",
     dependencies=[Depends(require_role([UserRole.DISTRIBUTOR]))]
 )
 async def get_distributor_payments(
@@ -986,6 +934,7 @@ async def get_distributor_payments(
     Raises:
         HTTPException 403: If user is not a distributor
     """
+    verify_active_distributor(current_user, db)
     distributor_id = current_user.id
     print(distributor_id)
     

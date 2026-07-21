@@ -5,6 +5,7 @@ from .api.v1.wholesaler import v1_wholesaler
 from .api.v1.admin import v1_admin
 from .api.v1.category import v1_category
 from .api.v1.payment import v1_payment
+from .api.v1.wallet import v1_wallet
 from .core.database import init_db
 
 # external imports
@@ -28,6 +29,7 @@ app.add_middleware(
 )
 
 app.include_router(v1_payment)
+app.include_router(v1_wallet)
 app.include_router(v1_auth)
 app.include_router(v1_category)
 app.include_router(v1_admin)

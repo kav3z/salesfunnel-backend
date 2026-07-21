@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 class PaymentStatus(str, Enum):
     PENDING = "pending"
-    VERIFIED = "verified"
+    COMPLETED = "completed"
 
 
 
@@ -40,7 +40,7 @@ class Payment(SQLModel, table=True):
     amount: Decimal = Field(
         nullable=False,
         decimal_places=2,
-        max_digits=10
+        max_digits=16
     )
     payment_method: str = Field(
         nullable=False
